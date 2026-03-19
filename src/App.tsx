@@ -44,10 +44,8 @@ export default function App() {
   const damageFlash = useRef(0);
   const fuseTimer = useRef(0);
   const grid = useRef<Uint8Array>(new Uint8Array(GRID_W * GRID_H));
-  // Legacy edge seams: hSeams[y*GRID_W+x]=1 means a historical border ran between row y and y+1 at col x
-  //                    vSeams[y*GRID_W+x]=1 means a historical border ran between col x and x+1 at row y
-  const seamsH = useRef<Uint8Array>(new Uint8Array(GRID_W * GRID_H));
-  const seamsV = useRef<Uint8Array>(new Uint8Array(GRID_W * GRID_H));
+  const historyStack = useRef<Path2D[]>([]);
+  const trailParticles = useRef<Particle[]>([]);
   const trail = useRef<Point[]>([]);
   const invalidLoop = useRef<Point[]>([]);
   const sparks = useRef<{ pos: Point; dir: Point; migrating: boolean; migrateTarget: Point | null }[]>([]);
@@ -55,6 +53,9 @@ export default function App() {
   const isTrailing = useRef<boolean>(false);
   const lastTime = useRef<number>(0);
   const animationTime = useRef<number>(0);
+  const bucketAngle = useRef<number>(0);
+  const captureWaveMask = useRef<Uint8Array | null>(null);
+  const captureWaveProgress = useRef<number>(1);
   const requestRef = useRef<number>();
   const gameStateRef = useRef(gameState);
   const isPausedRef = useRef(false);
@@ -83,8 +84,8 @@ export default function App() {
     spiderPos.current = { x: 0, y: 0 };
     spiderDir.current = Direction.NONE;
     grid.current.fill(0);
-    seamsH.current.fill(0);
-    seamsV.current.fill(0);
+    historyStack.current = [];
+    trailParticles.current = [];
     trail.current = [];
     invalidLoop.current = [];
     sparks.current = [
@@ -94,6 +95,9 @@ export default function App() {
     isOnSafe.current = true;
     isTrailing.current = false;
     animationTime.current = 0;
+    bucketAngle.current = 0;
+    captureWaveMask.current = null;
+    captureWaveProgress.current = 1;
     // Qix starts in center of field, moving diagonally
     qixPos.current = { x: dimensions.fieldWidth / 2, y: dimensions.fieldHeight / 2 };
     const angle = Math.PI / 4 + Math.floor(Math.random() * 4) * (Math.PI / 2);
@@ -217,11 +221,16 @@ export default function App() {
       }
 
       // 3. Everything not reachable from the Qix gets filled (skip border cells first)
+      captureWaveMask.current = new Uint8Array(GRID_W * GRID_H);
+      captureWaveProgress.current = 0;
       for (let i = 0; i < GRID_W * GRID_H; i++) {
         const x = i % GRID_W;
         const y = Math.floor(i / GRID_W);
         const onBorder = x === 0 || x === GRID_W - 1 || y === 0 || y === GRID_H - 1;
-        if (!visited[i] && !onBorder) grid.current[i] = 1;
+        if (!visited[i] && !onBorder) {
+          if (grid.current[i] !== 1) captureWaveMask.current[i] = 1;
+          grid.current[i] = 1;
+        }
       }
 
       // 4. Extend captured area to border cells whose inward neighbor is captured
@@ -306,13 +315,14 @@ export default function App() {
         trail.current.forEach((p, idx) => {
           if (idx % 2 === 0) {
             for (let i = 0; i < 2; i++) {
+              const rc = Math.random();
               particles.current.push({
                 pos: { ...p },
-                vel: { x: (Math.random() - 0.5) * 100, y: (Math.random() - 0.5) * 100 },
-                color: '#10b981',
-                life: 0.5 + Math.random() * 0.5,
+                vel: { x: (Math.random() - 0.5) * 120, y: (Math.random() - 0.5) * 120 },
+                color: rc > 0.6 ? '#E8A840' : rc > 0.3 ? '#C87A30' : '#F5D080',
+                life: 0.4 + Math.random() * 0.6,
                 maxLife: 1,
-                size: 2 + Math.random() * 3,
+                size: 1.5 + Math.random() * 3,
               });
             }
           }
@@ -334,22 +344,32 @@ export default function App() {
       isTrailing.current = false;
       fuseTimer.current = 0;
 
-      // Record the current active border edges as legacy seams so they persist
-      // visually once future captures push the boundary further inward.
-      for (let y = 0; y < GRID_H - 1; y++) {
-        for (let x = 0; x < GRID_W; x++) {
-          if ((grid.current[y * GRID_W + x] === 1) !== (grid.current[(y + 1) * GRID_W + x] === 1)) {
-            seamsH.current[y * GRID_W + x] = 1;
-          }
-        }
-      }
+      // Convert the new captured area boundary into a Path2D and save to historyStack
+      const newCapturePath = new Path2D();
+      const cellW = dimensions.fieldWidth / (GRID_W - 1);
+      const cellH = dimensions.fieldHeight / (GRID_H - 1);
+      
       for (let y = 0; y < GRID_H; y++) {
-        for (let x = 0; x < GRID_W - 1; x++) {
-          if ((grid.current[y * GRID_W + x] === 1) !== (grid.current[y * GRID_W + x + 1] === 1)) {
-            seamsV.current[y * GRID_W + x] = 1;
+        for (let x = 0; x < GRID_W; x++) {
+          if (captureWaveMask.current[y * GRID_W + x] !== 1) continue;
+          const rx = x * cellW;
+          const ry = y * cellH;
+          if (x + 1 < GRID_W && captureWaveMask.current[y * GRID_W + (x + 1)] !== 1) {
+            newCapturePath.moveTo(rx + cellW, ry); newCapturePath.lineTo(rx + cellW, ry + cellH);
+          }
+          if (y + 1 < GRID_H && captureWaveMask.current[(y + 1) * GRID_W + x] !== 1) {
+            newCapturePath.moveTo(rx, ry + cellH); newCapturePath.lineTo(rx + cellW, ry + cellH);
+          }
+          if (x - 1 >= 0 && captureWaveMask.current[y * GRID_W + (x - 1)] !== 1) {
+            newCapturePath.moveTo(rx, ry); newCapturePath.lineTo(rx, ry + cellH);
+          }
+          if (y - 1 >= 0 && captureWaveMask.current[(y - 1) * GRID_W + x] !== 1) {
+            newCapturePath.moveTo(rx, ry); newCapturePath.lineTo(rx + cellW, ry);
           }
         }
       }
+      historyStack.current.push(newCapturePath);
+      trailParticles.current = [];
     };
 
     // Lose a life: reset spider, decrement lives
@@ -357,6 +377,23 @@ export default function App() {
       livesRef.current -= 1;
       setLives(livesRef.current);
       damageFlash.current = 0.5;
+
+      // Sand grain death explosion
+      const deathX = spiderPos.current.x;
+      const deathY = spiderPos.current.y;
+      for (let ei = 0; ei < 150; ei++) {
+        const eAngle = Math.random() * Math.PI * 2;
+        const eSpeed = 60 + Math.random() * 180;
+        const er = Math.random();
+        particles.current.push({
+          pos: { x: deathX, y: deathY },
+          vel: { x: Math.cos(eAngle) * eSpeed, y: Math.sin(eAngle) * eSpeed },
+          color: er > 0.5 ? '#E8A840' : er > 0.25 ? '#C87A30' : '#F5D080',
+          life: 0.4 + Math.random() * 0.6,
+          maxLife: 1,
+          size: 2 + Math.random() * 4,
+        });
+      }
 
       if (livesRef.current <= 0) {
         setGameState('GAMEOVER');
@@ -380,8 +417,8 @@ export default function App() {
       trail.current = [];
       invalidLoop.current = [];
       sparks.current = [
-        { pos: { x: dimensions.fieldWidth * 0.25, y: dimensions.fieldHeight }, dir: { x: -1, y: 0 }, migrating: false },
-        { pos: { x: dimensions.fieldWidth * 0.75, y: dimensions.fieldHeight }, dir: { x:  1, y: 0 }, migrating: false },
+        { pos: { x: dimensions.fieldWidth * 0.25, y: dimensions.fieldHeight }, dir: { x: -1, y: 0 }, migrating: false, migrateTarget: null },
+        { pos: { x: dimensions.fieldWidth * 0.75, y: dimensions.fieldHeight }, dir: { x:  1, y: 0 }, migrating: false, migrateTarget: null },
       ];
       isOnSafe.current = true;
       isTrailing.current = false;
@@ -395,6 +432,11 @@ export default function App() {
       if (gameStateRef.current === 'PLAYING' && !isPausedRef.current) {
         animationTime.current += dt * 1000;
 
+        // Wave reveal progress
+        if (captureWaveProgress.current < 1) {
+          captureWaveProgress.current = Math.min(1, captureWaveProgress.current + dt / 0.8);
+        }
+
         // Flash timers
         if (captureFlash.current > 0) captureFlash.current -= dt;
         if (damageFlash.current > 0) damageFlash.current -= dt;
@@ -406,6 +448,13 @@ export default function App() {
           p.life -= dt;
         });
         particles.current = particles.current.filter(p => p.life > 0);
+        
+        trailParticles.current.forEach(p => {
+          p.pos.x += p.vel.x * dt;
+          p.pos.y += p.vel.y * dt;
+          p.life -= dt;
+        });
+        trailParticles.current = trailParticles.current.filter(p => p.life > 0);
 
         // Floating texts
         floatingTexts.current.forEach(ft => { ft.pos.y -= 30 * dt; ft.life -= dt; });
@@ -524,8 +573,34 @@ export default function App() {
                 }
               }
             }
+            
+            const dx = nextPos.x - spiderPos.current.x;
+            const dy = nextPos.y - spiderPos.current.y;
+            
+            if (dx !== 0 || dy !== 0) {
+              const targetAngle = Math.atan2(dy, dx);
+              let diff = targetAngle - bucketAngle.current;
+              while (diff > Math.PI) diff -= Math.PI * 2;
+              while (diff < -Math.PI) diff += Math.PI * 2;
+              bucketAngle.current += diff * 0.3; // fast rotation toward target
+            }
 
             spiderPos.current = nextPos;
+            
+            // Spawn sand grains for the active trail
+            if (isTrailing.current && (dx !== 0 || dy !== 0)) {
+              if (Math.random() < 0.6) {
+                trailParticles.current.push({
+                  pos: { x: nextPos.x + (Math.random()-0.5)*4, y: nextPos.y + (Math.random()-0.5)*4 },
+                  vel: { x: (Math.random()-0.5)*15, y: (Math.random()-0.5)*15 },
+                  color: Math.random() > 0.5 ? '#E8A840' : '#C87A30',
+                  life: 10, // lives a long time to act as the trailing path
+                  maxLife: 10,
+                  size: 1.5 + Math.random() * 2
+                });
+              }
+            }
+            
             if (spiderDir.current === Direction.NONE) break;
           }
         }
@@ -719,8 +794,8 @@ export default function App() {
 
       renderFrame(ctx, canvas, dimensions, {
         grid: grid.current,
-        seamsH: seamsH.current,
-        seamsV: seamsV.current,
+        historyStack: historyStack.current,
+        trailParticles: trailParticles.current,
         trail: trail.current,
         invalidLoop: invalidLoop.current,
         isTrailing: isTrailing.current,
@@ -736,6 +811,9 @@ export default function App() {
         bossEnabled: bossEnabledRef.current,
         fuseProgress: isTrailing.current ? fuseTimer.current / FUSE_MAX_TIME : 0,
         animationTime: animationTime.current,
+        bucketAngle: bucketAngle.current,
+        captureWaveMask: captureWaveMask.current,
+        captureWaveProgress: captureWaveProgress.current,
       });
 
       requestRef.current = requestAnimationFrame(update);
@@ -806,7 +884,7 @@ export default function App() {
   };
 
   return (
-    <div className="fixed inset-0 bg-stone-900 flex flex-col overflow-hidden touch-none select-none font-sans">
+    <div className="fixed inset-0 bg-black flex flex-col overflow-hidden touch-none select-none font-sans">
       <HUD
         isVisible={gameState === 'PLAYING'}
         capturedPercent={capturedPercent}
@@ -816,15 +894,7 @@ export default function App() {
 
       <div ref={containerRef} className="flex-1 relative flex items-center justify-center overflow-hidden">
         {/* Background */}
-        <div className="absolute inset-0 z-0">
-          <img
-            src="https://i.pinimg.com/1200x/37/f9/e7/37f9e7f2464de08adc96ea62f3592b88.jpg"
-            alt="Forest Background"
-            className="w-full h-full object-cover opacity-70 brightness-75"
-            referrerPolicy="no-referrer"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-stone-900/60 via-transparent to-stone-900/90" />
-        </div>
+        <div className="absolute inset-0 z-0 bg-black" />
 
         <canvas
           ref={canvasRef}

@@ -24,13 +24,13 @@ export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, 
           key="gameover"
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="z-10 bg-stone-50/90 backdrop-blur-xl p-10 rounded-[40px] border border-stone-200/50 flex flex-col items-center gap-6 shadow-2xl text-stone-900"
+          className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] text-white"
         >
-          <h2 className="text-3xl font-serif font-medium">Game Over</h2>
-          <p className="text-stone-600 text-center text-sm italic">You captured {capturedPercent}% of the territory.</p>
+          <h2 className="text-4xl font-sans font-bold tracking-tight">Game Over</h2>
+          <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">You captured {capturedPercent}% of the territory.</p>
           <button
             onClick={onRestart}
-            className="flex items-center justify-center w-full py-4 bg-stone-900 text-white rounded-full font-medium text-lg transition-all hover:bg-stone-800 active:scale-95 shadow-lg"
+            className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
           >
             <RotateCcw className="mr-2 w-5 h-5" />
             Try Again
@@ -43,16 +43,16 @@ export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, 
           key="win"
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="z-10 bg-stone-50/90 backdrop-blur-xl p-10 rounded-[40px] border border-stone-200/50 flex flex-col items-center gap-6 shadow-2xl text-stone-900"
+          className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] text-white"
         >
-          <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg">
-            <Bug className="w-10 h-10 text-white" />
+          <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.5)]">
+            <Bug className="w-10 h-10 text-black" />
           </div>
-          <h2 className="text-3xl font-serif font-medium">Victory!</h2>
-          <p className="text-stone-600 text-center text-sm italic">You captured the territory.</p>
+          <h2 className="text-4xl font-sans font-bold tracking-tight">Victory!</h2>
+          <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">You captured the territory.</p>
           <button
             onClick={onRestart}
-            className="flex items-center justify-center w-full py-4 bg-emerald-600 text-white rounded-full font-medium text-lg transition-all hover:bg-emerald-700 active:scale-95 shadow-lg shadow-emerald-600/20"
+            className="flex items-center justify-center w-full py-4 bg-emerald-500 text-black rounded-full font-bold text-lg transition-all hover:bg-emerald-400 active:scale-95 shadow-[0_0_20px_rgba(16,185,129,0.3)] mt-2"
           >
             <RotateCcw className="mr-2 w-5 h-5" />
             Play Again
@@ -71,11 +71,11 @@ export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, 
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-stone-50 p-10 rounded-[40px] border border-stone-200 shadow-2xl flex flex-col items-center gap-8 max-w-[300px] w-full"
+            className="bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 shadow-[0_0_40px_rgba(0,0,0,0.8)] flex flex-col items-center gap-8 max-w-[320px] w-full text-white"
           >
             <div className="text-center">
-              <h2 className="text-3xl font-serif font-medium text-stone-900 mb-2">Paused</h2>
-              <p className="text-stone-500 text-sm font-light italic">The forest waits for your return.</p>
+              <h2 className="text-4xl font-sans font-bold mb-2">Paused</h2>
+              <p className="text-white/50 text-sm font-medium tracking-wide uppercase">Sandbox settings</p>
             </div>
             <div className="flex flex-col gap-3 w-full">
               {/* Toggles */}
@@ -87,25 +87,25 @@ export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, 
                 <button
                   key={label}
                   onClick={onToggle}
-                  className="w-full flex items-center justify-between px-5 py-3 rounded-2xl bg-stone-100 border border-stone-200 text-stone-700 font-medium transition-all hover:bg-stone-200 active:scale-95"
+                  className="w-full flex items-center justify-between px-6 py-4 rounded-full bg-white/5 border border-white/10 text-white font-bold transition-all hover:bg-white/10 active:scale-95"
                 >
-                  <span className="text-sm">{label}</span>
-                  <div className={`w-11 h-6 rounded-full transition-colors relative ${enabled ? 'bg-emerald-500' : 'bg-stone-300'}`}>
-                    <div className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                  <span className="text-sm tracking-wide">{label}</span>
+                  <div className={`w-12 h-7 rounded-full transition-colors relative shadow-inner ${enabled ? 'bg-amber-500' : 'bg-white/20'}`}>
+                    <div className={`absolute top-1 w-5 h-5 rounded-full bg-black shadow transition-transform ${enabled ? 'translate-x-[22px]' : 'translate-x-1'}`} />
                   </div>
                 </button>
               ))}
 
               <button
                 onClick={onResume}
-                className="w-full py-4 bg-stone-900 text-white rounded-full font-medium transition-all hover:bg-stone-800 active:scale-95 flex items-center justify-center gap-2"
+                className="w-full py-4 bg-amber-500 text-black rounded-full font-bold transition-all hover:bg-amber-400 active:scale-95 flex items-center justify-center gap-2 mt-2"
               >
                 <Play className="w-5 h-5 fill-current" />
                 Resume
               </button>
               <button
                 onClick={onRestart}
-                className="w-full py-4 bg-stone-200 text-stone-600 rounded-full font-medium transition-all hover:bg-stone-300 active:scale-95 flex items-center justify-center gap-2"
+                className="w-full py-4 bg-white/10 text-white border border-white/20 rounded-full font-bold transition-all hover:bg-white/20 active:scale-95 flex items-center justify-center gap-2"
               >
                 <RotateCcw className="w-5 h-5" />
                 Restart

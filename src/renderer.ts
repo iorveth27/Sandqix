@@ -3,8 +3,8 @@ import type { Dimensions, Particle, FloatingText, Point } from './types';
 
 export interface RenderState {
   grid: Uint8Array;
-  seamsH: Uint8Array;
-  seamsV: Uint8Array;
+  historyStack: Path2D[];
+  trailParticles: Particle[];
   trail: Point[];
   invalidLoop: Point[];
   isTrailing: boolean;
@@ -20,7 +20,36 @@ export interface RenderState {
   bossEnabled: boolean;
   fuseProgress: number; // 0 = none, 0–1 = how far along trail fuse has burned
   animationTime: number;
+  bucketAngle: number;
+  captureWaveMask: Uint8Array | null;
+  captureWaveProgress: number;
 }
+
+function hashFloat(a: number, b: number): number {
+  let h = (a * 374761393 + b * 1103515245) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  return ((h ^ (h >>> 16)) >>> 0) / 0xffffffff;
+}
+
+const patCanvas = document.createElement('canvas');
+patCanvas.width = 32; patCanvas.height = 32;
+const patCtx = patCanvas.getContext('2d')!;
+patCtx.fillStyle = '#C89040';
+patCtx.fillRect(0, 0, 32, 32);
+for (let gy = 0; gy < 32; gy++) {
+  for (let gx = 0; gx < 32; gx++) {
+    const v = hashFloat(gx * 31 + 7, gy * 17 + 3);
+    if (v < 0.3) {
+      patCtx.fillStyle = `rgba(0,0,0,${(0.05 + v * 0.35).toFixed(2)})`;
+      patCtx.fillRect(gx, gy, 1, 1);
+    } else if (v > 0.75) {
+      patCtx.fillStyle = `rgba(255,220,120,${((v - 0.75) * 0.7).toFixed(2)})`;
+      patCtx.fillRect(gx, gy, 1, 1);
+    }
+  }
+}
+let sandPattern: CanvasPattern | null = null;
 
 export function renderFrame(
   ctx: CanvasRenderingContext2D,
@@ -29,12 +58,17 @@ export function renderFrame(
   state: RenderState,
 ) {
   const {
-    grid, seamsH, seamsV, trail, invalidLoop, isTrailing, isOnSafe, spiderPos,
+    grid, historyStack, trailParticles, trail, invalidLoop, isTrailing, isOnSafe, spiderPos,
     particles, floatingTexts, captureFlash, damageFlash,
     qixPos, sparks, sparksEnabled, bossEnabled, fuseProgress, animationTime,
+    bucketAngle, captureWaveMask, captureWaveProgress,
   } = state;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Black void field background
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(dims.offsetX, dims.offsetY, dims.fieldWidth, dims.fieldHeight);
 
   // Damage flash / screen shake
   if (damageFlash > 0) {
@@ -71,64 +105,51 @@ export function renderFrame(
   }
   ctx.restore();
 
-  // Captured web areas
+  // Sand territory — captured cells rendered with textured sand blocks
   const cellW = dims.fieldWidth / (GRID_W - 1);
   const cellH = dims.fieldHeight / (GRID_H - 1);
+  if (!sandPattern) sandPattern = ctx.createPattern(patCanvas, 'repeat')!;
+  
   ctx.save();
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
-      if (grid[y * GRID_W + x] === 1) {
-        const rx = dims.offsetX + x * cellW;
-        const ry = dims.offsetY + y * cellH;
-        ctx.fillRect(rx, ry, cellW + 0.5, cellH + 0.5);
-        if ((x + y) % 4 === 0) {
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-          ctx.lineWidth = 0.5;
-          ctx.beginPath();
-          ctx.moveTo(rx, ry);
-          ctx.lineTo(rx + cellW, ry + cellH);
-          ctx.stroke();
-        }
-      }
+  ctx.fillStyle = sandPattern;
+  historyStack.forEach((path, i) => {
+    ctx.save();
+    ctx.translate(dims.offsetX, dims.offsetY);
+    if (i === historyStack.length - 1 && captureWaveProgress < 1) {
+      // Animated pour for the latest capture
+      ctx.clip(path);
+      const maxRadius = Math.max(dims.fieldWidth, dims.fieldHeight) * 1.5;
+      const currentRadius = maxRadius * captureWaveProgress;
+      ctx.beginPath();
+      ctx.arc(spiderPos.x, spiderPos.y, currentRadius, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fill(path);
     }
-  }
+    ctx.restore();
+  });
+  ctx.restore();
+
   // Legacy seams — historical borders now inside captured territory, drawn as faint lines
   ctx.save();
-  ctx.strokeStyle = 'rgba(200, 230, 255, 0.55)';
-  ctx.lineWidth = 2.5;
-  ctx.shadowBlur = 5;
-  ctx.shadowColor = 'rgba(150, 200, 255, 0.5)';
-  ctx.beginPath();
-  for (let y = 0; y < GRID_H - 1; y++) {
-    for (let x = 0; x < GRID_W; x++) {
-      if (seamsH[y * GRID_W + x] && grid[y * GRID_W + x] === 1 && grid[(y + 1) * GRID_W + x] === 1) {
-        const rx = dims.offsetX + x * cellW;
-        const ry = dims.offsetY + (y + 1) * cellH;
-        ctx.moveTo(rx, ry);
-        ctx.lineTo(rx + cellW, ry);
-      }
-    }
-  }
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W - 1; x++) {
-      if (seamsV[y * GRID_W + x] && grid[y * GRID_W + x] === 1 && grid[y * GRID_W + x + 1] === 1) {
-        const rx = dims.offsetX + (x + 1) * cellW;
-        const ry = dims.offsetY + y * cellH;
-        ctx.moveTo(rx, ry);
-        ctx.lineTo(rx, ry + cellH);
-      }
-    }
-  }
-  ctx.stroke();
+  ctx.strokeStyle = 'rgba(180, 120, 40, 0.55)';
+  ctx.lineWidth = 3.75;
+  ctx.shadowBlur = 4;
+  ctx.shadowColor = 'rgba(200, 140, 60, 0.4)';
+  historyStack.forEach(path => {
+    ctx.save();
+    ctx.translate(dims.offsetX, dims.offsetY);
+    ctx.stroke(path);
+    ctx.restore();
+  });
   ctx.restore();
 
   // Territory border lines — draw a bright edge wherever captured meets uncaptured
   ctx.save();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.strokeStyle = 'rgba(245, 190, 80, 0.9)';
   ctx.lineWidth = 2;
   ctx.shadowBlur = 6;
-  ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
+  ctx.shadowColor = 'rgba(245, 160, 50, 0.7)';
   ctx.beginPath();
   for (let y = 0; y < GRID_H; y++) {
     for (let x = 0; x < GRID_W; x++) {
@@ -160,16 +181,18 @@ export function renderFrame(
   ctx.stroke();
   ctx.restore();
 
-  // Current trail
-  if (isTrailing && trail.length > 1) {
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(dims.offsetX + trail[0].x, dims.offsetY + trail[0].y);
-    for (let i = 1; i < trail.length; i++) {
-      ctx.lineTo(dims.offsetX + trail[i].x, dims.offsetY + trail[i].y);
-    }
-    ctx.stroke();
+  // Current trail — sandy grain dots
+  if (isTrailing && trail.length > 1 && trailParticles.length > 0) {
+    ctx.save();
+    trailParticles.forEach(p => {
+      const px = dims.offsetX + p.pos.x;
+      const py = dims.offsetY + p.pos.y;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(px, py, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
 
     // Fuse: burning dot running from trail start toward player
     if (fuseProgress > 0 && trail.length > 1) {
@@ -242,7 +265,7 @@ export function renderFrame(
   // Success flash
   if (captureFlash > 0) {
     ctx.save();
-    ctx.fillStyle = `rgba(16, 185, 129, ${captureFlash * 0.4})`;
+    ctx.fillStyle = `rgba(200, 140, 50, ${captureFlash * 0.4})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
   }
@@ -267,7 +290,7 @@ export function renderFrame(
     const ty = dims.offsetY + ft.pos.y;
     ctx.save();
     ctx.globalAlpha = ft.life / ft.maxLife;
-    ctx.fillStyle = 'white';
+    ctx.fillStyle = '#F5C86E';
     ctx.font = 'bold 20px Inter';
     ctx.textAlign = 'center';
     ctx.shadowBlur = 10;
@@ -310,45 +333,58 @@ export function renderFrame(
     ctx.restore();
   }
 
-  // Spider body
+  // Bucket (player) — top-down view, rotated toward movement direction
   const drawX = dims.offsetX + spiderPos.x;
   const drawY = dims.offsetY + spiderPos.y;
-  ctx.save();
+
+  // Safe-zone amber ring (drawn before rotation transform)
   if (isOnSafe) {
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = '#10b981';
-    ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = 3;
+    ctx.save();
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = '#F5B840';
+    ctx.strokeStyle = 'rgba(245,184,64,0.8)';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(drawX, drawY, 14, 0, Math.PI * 2);
+    ctx.arc(drawX, drawY, 17, 0, Math.PI * 2);
     ctx.stroke();
-  } else {
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = 'black';
+    ctx.restore();
   }
-  ctx.fillStyle = '#1a1a1a';
+
+  ctx.save();
+  ctx.translate(drawX, drawY);
+  ctx.rotate(bucketAngle);
+
+  // Drop shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath();
-  ctx.arc(drawX, drawY, 12, 0, Math.PI * 2);
+  ctx.ellipse(2, 2, 13, 10, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Bucket rim/body
+  ctx.fillStyle = '#7C4A1E';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 13, 10, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Sand inside
+  ctx.fillStyle = '#E8A840';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 10, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Sand highlights
+  ctx.fillStyle = 'rgba(255,230,140,0.55)';
+  ctx.beginPath(); ctx.arc(-3, -2, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,210,100,0.4)';
+  ctx.beginPath(); ctx.arc(2, 1, 1.5, 0, Math.PI * 2); ctx.fill();
+
+  // Handle arc at leading edge
+  ctx.strokeStyle = '#4A2A0E';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(0, -1, 9, Math.PI * 1.15, Math.PI * 1.85);
+  ctx.stroke();
+
   ctx.restore();
-
-  // Spider eyes
-  ctx.fillStyle = 'white';
-  ctx.beginPath(); ctx.arc(drawX - 4, drawY - 2, 5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(drawX + 4, drawY - 2, 5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = 'black';
-  ctx.beginPath(); ctx.arc(drawX - 4, drawY - 2, 2, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(drawX + 4, drawY - 2, 2, 0, Math.PI * 2); ctx.fill();
-
-  // Spider legs
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = 1.5;
-  for (let i = 0; i < 8; i++) {
-    const side = i < 4 ? -1 : 1;
-    const angle = (i % 4) * (Math.PI / 6) - (Math.PI / 4);
-    ctx.beginPath();
-    ctx.moveTo(drawX + side * 8, drawY);
-    ctx.quadraticCurveTo(drawX + side * 20, drawY + Math.sin(angle) * 10, drawX + side * 25, drawY + Math.sin(angle) * 20);
-    ctx.stroke();
-  }
 }
