@@ -66,7 +66,7 @@ export function HUD({ isVisible, capturedPercent, lives, onPause }: HUDProps) {
                   className="absolute z-10 pointer-events-none"
                   style={{ left: '80%', top: '-2px', transform: 'translateX(-50%)' }}
                 >
-                  <span className="text-sm leading-none" style={{ filter: 'drop-shadow(0 0 4px rgba(245,166,35,0.9))' }}>⭐</span>
+                  <span style={{ fontSize: 36, lineHeight: 1, filter: 'drop-shadow(0 2px 6px rgba(180,120,0,0.9)) drop-shadow(0 0 14px rgba(255,200,0,0.5))' }}>⭐</span>
                 </div>
 
                 <div
@@ -95,11 +95,6 @@ export function HUD({ isVisible, capturedPercent, lives, onPause }: HUDProps) {
                     />
                   </div>
 
-                  {/* 80% tick mark inside the bar */}
-                  <div
-                    className="absolute top-0 bottom-0 w-px pointer-events-none"
-                    style={{ left: '80%', background: 'rgba(255,255,255,0.4)' }}
-                  />
                 </div>
               </div>
 
