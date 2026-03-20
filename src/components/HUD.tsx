@@ -66,7 +66,7 @@ export function HUD({ isVisible, capturedPercent, lives, onPause }: HUDProps) {
                   className="absolute z-10 pointer-events-none"
                   style={{ left: '80%', top: '-7px', transform: 'translateX(-50%)' }}
                 >
-                  <span style={{ fontSize: 36, lineHeight: 1, filter: 'drop-shadow(0 2px 6px rgba(180,120,0,0.9)) drop-shadow(0 0 14px rgba(255,200,0,0.5))' }}>⭐</span>
+                  <span style={{ fontSize: 36, lineHeight: 1, textShadow: '0 2px 6px rgba(180,120,0,0.9), 0 0 14px rgba(255,200,0,0.5), 0 0 28px rgba(255,200,0,0.3)' }}>⭐</span>
                 </div>
 
                 <div

@@ -15,6 +15,8 @@ export interface GameState {
   // ── Territory ──────────────────────────────────────────────────────────
   /** 0=EMPTY, 1=FILLED, 2=LINE, 3=NEWLINE, 4=EDGE */
   grid: Uint8Array;
+  /** Incremented every time the grid changes; used to invalidate the territory render cache */
+  gridVersion: number;
   /** 0→1 progress of the wave-reveal animation after each capture */
   captureWaveProgress: number;
 
@@ -79,6 +81,7 @@ export function createGameState(): GameState {
 
   return {
     grid,
+    gridVersion: 0,
     captureWaveProgress: 1,
 
     spiderPos: { x: 0, y: 0 },

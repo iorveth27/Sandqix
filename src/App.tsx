@@ -177,13 +177,21 @@ export default function App() {
         if (dist < bestDist) { bestDist = dist; bestPos = wp; }
       };
 
-      // Top and bottom rows
+      // Physical border rows/cols first (EDGE cells adjacent to remaining EMPTY space)
       for (let x = 0; x < GRID_W; x++) { checkBorderCell(x, 0); checkBorderCell(x, GRID_H - 1); }
-      // Left and right columns (excluding corners already covered)
       for (let y = 1; y < GRID_H - 1; y++) { checkBorderCell(0, y); checkBorderCell(GRID_W - 1, y); }
 
-      // Fallback: top-left corner (always EDGE)
-      if (bestDist === Infinity) bestPos = { x: 0, y: 0 };
+      // Fallback: scan all LINE cells (interior perimeter seams bordering EMPTY)
+      if (bestDist === Infinity) {
+        for (let gy = 0; gy < GRID_H; gy++) {
+          for (let gx = 0; gx < GRID_W; gx++) {
+            checkBorderCell(gx, gy);
+          }
+        }
+      }
+
+      // Last resort: top-left corner
+      if (bestDist === Infinity) bestPos = gridToWorld(0, 0, dimensions);
 
       state.spiderPos      = bestPos;
       state.spiderDir      = Direction.NONE;
@@ -245,6 +253,7 @@ export default function App() {
       const state = gs.current;
       renderFrame(ctx, canvas, dimensions, {
         grid:                state.grid,
+        gridVersion:         state.gridVersion,
         trailParticles:      state.trailParticles,
         trail:               state.trail,
         invalidLoop:         state.invalidLoop,

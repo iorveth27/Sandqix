@@ -242,6 +242,7 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
   }
 
   state.capturedPercent = newPercent;
+  if (capturedThisTime > 0) state.gridVersion++;
   state.trail           = [];
   state.invalidLoop     = [];
   state.playerOnBorder  = true;

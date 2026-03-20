@@ -3,6 +3,7 @@ import type { Dimensions, Particle, FloatingText, Point } from './types';
 
 export interface RenderState {
   grid: Uint8Array;
+  gridVersion: number;
   trailParticles: Particle[];
   trail: Point[];
   invalidLoop: Point[];
@@ -134,6 +135,13 @@ for (let gy = 0; gy < 32; gy++) {
 }
 let sandPattern: CanvasPattern | null = null;
 
+// ── Offscreen territory cache (FILLED + borders + LINE cells) ─────────────
+// Rebuilt only when gridVersion or canvas dimensions change — O(1) per frame otherwise.
+let territoryCanvas: HTMLCanvasElement | null = null;
+let territoryCtx: CanvasRenderingContext2D | null = null;
+let cachedGridVersion = -1;
+let cachedDimsKey = '';
+
 // ── Pre-generate star positions for the background sky ───────────────────
 const STAR_COUNT = 80;
 const stars: { x: number; y: number; r: number; twinkle: number }[] = [];
@@ -153,7 +161,7 @@ export function renderFrame(
   state: RenderState,
 ) {
   const {
-    grid, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing, playerOnBorder,
+    grid, gridVersion, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing, playerOnBorder,
     spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixPos, qixTrail, sparks,
     sparksEnabled, bossEnabled, fuseProgress, animationTime, bucketAngle, bucketTilt, bucketPitch,
     captureWaveProgress, isMoving
@@ -212,15 +220,15 @@ export function renderFrame(
   ctx.fillRect(dims.offsetX, dims.offsetY, dims.fieldWidth, dims.fieldHeight);
   ctx.restore();
 
-  // Damage flash / screen shake
+  // Damage flash / screen shake — ctx.save() BEFORE translate so restore() fully undoes it
   if (damageFlash > 0) {
+    ctx.save();
     const shakeX = (Math.random() - 0.5) * 10;
     const shakeY = (Math.random() - 0.5) * 10;
     ctx.translate(shakeX, shakeY);
-    ctx.save();
     ctx.fillStyle = `rgba(255, 0, 0, ${damageFlash * 0.3})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
+    // note: restore() is deferred to after QIX so the whole field shakes
   }
 
   // ── Warm wooden/sand frame border ────────────────────────────────────────
@@ -258,87 +266,111 @@ export function renderFrame(
   const cellH = dims.fieldHeight / (GRID_H - 1);
   if (!sandPattern) sandPattern = ctx.createPattern(patCanvas, 'repeat')!;
 
-  // ── FILLED (1) cells — sand texture ──────────────────────────────────────
-  ctx.save();
-  ctx.beginPath();
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
-      if (grid[y * GRID_W + x] === CELL.FILLED) {
-        const rx = dims.offsetX + x * cellW;
-        const ry = dims.offsetY + y * cellH;
-        ctx.rect(rx, ry, cellW + 0.5, cellH + 0.5);
+  // ── Territory cache: FILLED + borders + LINE cells ────────────────────────
+  // Only rebuilt when gridVersion or canvas dimensions change.
+  const dimsKey = `${canvas.width}x${canvas.height}x${dims.offsetX}x${dims.offsetY}x${dims.fieldWidth}x${dims.fieldHeight}`;
+  if (gridVersion !== cachedGridVersion || dimsKey !== cachedDimsKey) {
+    cachedGridVersion = gridVersion;
+    cachedDimsKey = dimsKey;
+
+    if (!territoryCanvas) {
+      territoryCanvas = document.createElement('canvas');
+      territoryCtx = territoryCanvas.getContext('2d')!;
+    }
+    territoryCanvas.width = canvas.width;
+    territoryCanvas.height = canvas.height;
+    const tc = territoryCtx!;
+    tc.clearRect(0, 0, canvas.width, canvas.height);
+
+    // FILLED cells — sand texture
+    tc.beginPath();
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        if (grid[y * GRID_W + x] === CELL.FILLED) {
+          tc.rect(dims.offsetX + x * cellW, dims.offsetY + y * cellH, cellW + 0.5, cellH + 0.5);
+        }
       }
     }
-  }
-  ctx.fillStyle = sandPattern!;
-  ctx.fill();
+    tc.fillStyle = sandPattern!;
+    tc.fill();
 
-  // Capture wave glow on newly filled territory
+    // Territory border lines — batched single path + single shadow stroke
+    tc.strokeStyle = 'rgba(245, 190, 80, 0.9)';
+    tc.lineWidth = 2;
+    tc.shadowBlur = 6;
+    tc.shadowColor = 'rgba(245, 160, 50, 0.7)';
+    tc.beginPath();
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        if (grid[y * GRID_W + x] !== CELL.FILLED) continue;
+        const rx = dims.offsetX + x * cellW;
+        const ry = dims.offsetY + y * cellH;
+        if (x + 1 < GRID_W && grid[y * GRID_W + (x + 1)] !== CELL.FILLED) {
+          tc.moveTo(rx + cellW, ry); tc.lineTo(rx + cellW, ry + cellH);
+        }
+        if (y + 1 < GRID_H && grid[(y + 1) * GRID_W + x] !== CELL.FILLED) {
+          tc.moveTo(rx, ry + cellH); tc.lineTo(rx + cellW, ry + cellH);
+        }
+        if (x - 1 >= 0 && grid[y * GRID_W + (x - 1)] !== CELL.FILLED) {
+          tc.moveTo(rx, ry); tc.lineTo(rx, ry + cellH);
+        }
+        if (y - 1 >= 0 && grid[(y - 1) * GRID_W + x] !== CELL.FILLED) {
+          tc.moveTo(rx, ry); tc.lineTo(rx + cellW, ry);
+        }
+      }
+    }
+    tc.stroke();
+    tc.shadowBlur = 0;
+
+    // LINE cells — batched path + single shadow fill
+    tc.fillStyle = '#e8a840';
+    tc.shadowBlur = 6;
+    tc.shadowColor = 'rgba(232, 168, 64, 0.7)';
+    tc.beginPath();
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        if (grid[y * GRID_W + x] === CELL.LINE) {
+          tc.rect(dims.offsetX + x * cellW, dims.offsetY + y * cellH, cellW + 0.5, cellH + 0.5);
+        }
+      }
+    }
+    tc.fill();
+    tc.shadowBlur = 0;
+  }
+
+  // Blit the cached territory (one drawImage per frame)
+  ctx.drawImage(territoryCanvas!, 0, 0);
+
+  // Capture wave glow — drawn live on top (only active for ~0.6s after a capture)
   if (captureWaveProgress < 1) {
+    ctx.save();
+    ctx.beginPath();
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        if (grid[y * GRID_W + x] === CELL.FILLED) {
+          ctx.rect(dims.offsetX + x * cellW, dims.offsetY + y * cellH, cellW + 0.5, cellH + 0.5);
+        }
+      }
+    }
     ctx.fillStyle = `rgba(255, 230, 100, ${(1 - captureWaveProgress) * 0.45})`;
     ctx.fill();
+    ctx.restore();
   }
-  ctx.restore();
-
-  // Territory border lines — orange glow at FILLED → non-FILLED boundaries
-  ctx.save();
-  ctx.strokeStyle = 'rgba(245, 190, 80, 0.9)';
-  ctx.lineWidth = 2;
-  ctx.shadowBlur = 6;
-  ctx.shadowColor = 'rgba(245, 160, 50, 0.7)';
-  ctx.beginPath();
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
-      if (grid[y * GRID_W + x] !== CELL.FILLED) continue;
-      const rx = dims.offsetX + x * cellW;
-      const ry = dims.offsetY + y * cellH;
-      if (x + 1 < GRID_W && grid[y * GRID_W + (x + 1)] !== CELL.FILLED) {
-        ctx.moveTo(rx + cellW, ry); ctx.lineTo(rx + cellW, ry + cellH);
-      }
-      if (y + 1 < GRID_H && grid[(y + 1) * GRID_W + x] !== CELL.FILLED) {
-        ctx.moveTo(rx, ry + cellH); ctx.lineTo(rx + cellW, ry + cellH);
-      }
-      if (x - 1 >= 0 && grid[y * GRID_W + (x - 1)] !== CELL.FILLED) {
-        ctx.moveTo(rx, ry); ctx.lineTo(rx, ry + cellH);
-      }
-      if (y - 1 >= 0 && grid[(y - 1) * GRID_W + x] !== CELL.FILLED) {
-        ctx.moveTo(rx, ry); ctx.lineTo(rx + cellW, ry);
-      }
-    }
-  }
-  ctx.stroke();
-  ctx.restore();
-
-  // ── LINE (2) cells — warm amber captured border ──────────────────────────
-  ctx.save();
-  ctx.fillStyle = '#e8a840';
-  ctx.shadowBlur = 6;
-  ctx.shadowColor = 'rgba(232, 168, 64, 0.7)';
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
-      if (grid[y * GRID_W + x] === CELL.LINE) {
-        const rx = dims.offsetX + x * cellW;
-        const ry = dims.offsetY + y * cellH;
-        ctx.fillRect(rx, ry, cellW + 0.5, cellH + 0.5);
-      }
-    }
-  }
-  ctx.restore();
 
   // ── NEWLINE (3) cells — white-hot active trail glow ──────────────────────
   ctx.save();
   ctx.fillStyle = 'rgba(255, 240, 160, 0.95)';
   ctx.shadowBlur = 10;
   ctx.shadowColor = 'rgba(255, 210, 80, 0.9)';
+  ctx.beginPath();
   for (let y = 0; y < GRID_H; y++) {
     for (let x = 0; x < GRID_W; x++) {
       if (grid[y * GRID_W + x] === CELL.NEWLINE) {
-        const rx = dims.offsetX + x * cellW;
-        const ry = dims.offsetY + y * cellH;
-        ctx.fillRect(rx, ry, cellW + 0.5, cellH + 0.5);
+        ctx.rect(dims.offsetX + x * cellW, dims.offsetY + y * cellH, cellW + 0.5, cellH + 0.5);
       }
     }
   }
+  ctx.fill();
   ctx.restore();
 
   // ── Invalid loop — red highlight (fades over 1.5 s) ──────────────────────
@@ -458,8 +490,9 @@ export function renderFrame(
     ctx.restore();
   }
 
+  // End of shaken region — restore transform saved before the shake translate
   if (damageFlash > 0) {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.restore();
   }
 
   // Success flash

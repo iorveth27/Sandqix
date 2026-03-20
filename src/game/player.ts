@@ -148,8 +148,12 @@ export function tickPlayer(
         }
         // Still inside the same grid cell we already marked — just advance world pos
         state.spiderPos = nextPos;
-      } else if (isWalkable(state.grid, nextGP.x, nextGP.y)) {
+      } else if (state.grid[nextGP.y * GRID_W + nextGP.x] === CELL.LINE ||
+                 state.grid[nextGP.y * GRID_W + nextGP.x] === CELL.EDGE) {
         // Closed trail — trigger territory capture
+        // Note: raw type check (not isWalkable) because at this moment the last
+        // EMPTY cell adjacent to the destination was just stamped NEWLINE by the
+        // trail, so the perimeter-pruning check would incorrectly reject it.
         state.trail.push(nextPos);
         state.spiderPos = nextPos;
         onCaptureArea();
