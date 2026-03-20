@@ -257,6 +257,7 @@ export default function App() {
         captureFlash:        state.captureFlash,
         damageFlash:         state.damageFlash,
         qixPos:              state.qixPos,
+        qixTrail:            state.qixTrail,
         sparks:              state.sparks.map(s => ({ pos: s.pos, migrating: s.migrating })),
         sparksEnabled:       sparksEnabledRef.current,
         bossEnabled:         bossEnabledRef.current,

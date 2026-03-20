@@ -48,6 +48,8 @@ export interface GameState {
   qixLastPos: Point;
   /** Current wander angle for QIX erratic movement */
   qixAngle: number;
+  /** Trailing positions for the segment-trail visual (most recent first) */
+  qixTrail: Point[];
   sparks: SparkState[];
 
   // ── Visual effects ─────────────────────────────────────────────────────
@@ -97,6 +99,7 @@ export function createGameState(): GameState {
     qixVel: { x: 0, y: 0 },
     qixLastPos: { x: 0, y: 0 },
     qixAngle: Math.PI / 4,
+    qixTrail: [],
     sparks: [],
 
     particles: [],

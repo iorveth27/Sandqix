@@ -15,6 +15,7 @@ export interface RenderState {
   captureFlash: number;
   damageFlash: number;
   qixPos: Point;
+  qixTrail: Point[];
   sparks: { pos: Point; migrating: boolean }[];
   sparksEnabled: boolean;
   bossEnabled: boolean;
@@ -153,7 +154,7 @@ export function renderFrame(
 ) {
   const {
     grid, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing, playerOnBorder,
-    spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixPos, sparks,
+    spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixPos, qixTrail, sparks,
     sparksEnabled, bossEnabled, fuseProgress, animationTime, bucketAngle, bucketTilt, bucketPitch,
     captureWaveProgress, isMoving
   } = state;
@@ -399,18 +400,56 @@ export function renderFrame(
 
   // Qix
   if (bossEnabled) {
+    const t = animationTime / 1000;
+    const qixColors = ['#ff00ff', '#ff4400', '#ffff00', '#00ffff', '#ff00aa', '#aa00ff'];
+
+    // Derive velocity direction from trail for squash/stretch
+    const velX = qixTrail.length > 0 ? qixPos.x - qixTrail[0].x : 0;
+    const velY = qixTrail.length > 0 ? qixPos.y - qixTrail[0].y : 0;
+    const velAngle = Math.atan2(velY, velX);
+    const velMag   = Math.hypot(velX, velY);
+    // stretchAmt 0–1: how much to elongate along velocity axis
+    const stretchAmt = Math.min(velMag / 3, 1);
+
+    // Draw ghost trail segments (most recent = index 0, oldest = last)
+    const allPositions = [qixPos, ...qixTrail];
+    for (let seg = allPositions.length - 1; seg >= 1; seg--) {
+      const pos    = allPositions[seg];
+      const alpha  = 0.12 * (1 - seg / allPositions.length);
+      const scale  = 1 - seg / allPositions.length * 0.6;
+      const sx = dims.offsetX + pos.x;
+      const sy = dims.offsetY + pos.y;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.shadowBlur  = 12;
+      ctx.shadowColor = 'rgba(255, 0, 255, 0.6)';
+      for (let i = 0; i < 6; i++) {
+        const angle = t * 1.8 + (i * Math.PI / 3);
+        const baseLen = (36 + Math.sin(t * 2.5 + i * 1.3) * 14) * scale;
+        ctx.strokeStyle = qixColors[i];
+        ctx.lineWidth   = 2 * scale;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + Math.cos(angle) * baseLen, sy + Math.sin(angle) * baseLen);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Draw the main Qix head with squash/stretch
     const qx = dims.offsetX + qixPos.x;
     const qy = dims.offsetY + qixPos.y;
-    const t  = animationTime / 1000;
     ctx.save();
-    ctx.shadowBlur = 25;
-    ctx.shadowColor = 'rgba(255, 0, 255, 0.9)';
-    const qixColors = ['#ff00ff', '#ff4400', '#ffff00', '#00ffff', '#ff00aa', '#aa00ff'];
+    ctx.shadowBlur = 35;
+    ctx.shadowColor = 'rgba(255, 0, 255, 0.95)';
     for (let i = 0; i < 6; i++) {
-      const angle = t * 1.8 + (i * Math.PI / 3);
-      const len   = 18 + Math.sin(t * 2.5 + i * 1.3) * 7;
+      const angle   = t * 1.8 + (i * Math.PI / 3);
+      const baseLen = 36 + Math.sin(t * 2.5 + i * 1.3) * 14;
+      // Squash/stretch: arms aligned with velocity get longer, perpendicular get shorter
+      const dot     = Math.cos(angle - velAngle);
+      const len     = baseLen * (1 + dot * 0.45 * stretchAmt);
       ctx.strokeStyle = qixColors[i];
-      ctx.lineWidth   = 2;
+      ctx.lineWidth   = 3;
       ctx.beginPath();
       ctx.moveTo(qx, qy);
       ctx.lineTo(qx + Math.cos(angle) * len, qy + Math.sin(angle) * len);

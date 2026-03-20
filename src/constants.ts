@@ -14,13 +14,13 @@ export const CROSS_TIME_SECONDS = 2;
 export const FUSE_MAX_TIME = 3;
 
 // ─── Collision radii (world-space pixels) ─────────────────────────────────
-export const QIX_RADIUS = 16;
+export const QIX_RADIUS = 32;
 export const SPIDER_RADIUS = 12;
 export const SPARK_RADIUS = 8;
 
 // ─── Spark speed ───────────────────────────────────────────────────────────
 /** Fraction of the player crossing speed */
-export const SPARK_SPEED = 0.3;
+export const SPARK_SPEED = 0.5;
 
 // ─── Win condition ─────────────────────────────────────────────────────────
 export const WIN_PERCENT = 80;

@@ -1,9 +1,12 @@
 /**
  * qix.ts — QIX erratic Verlet-based wandering movement.
  *
- * Replaces simple axis-bounce with a wander angle that's perturbed each frame
- * via Verlet integration, giving the classic erratic QIX movement.
- * Bounces off field edges and captured territory (non-EMPTY cells).
+ * Improvements over the original:
+ * - Segment trail: maintains the last N head positions for a "comet" visual.
+ * - Dynamic jitter: Qix gets more erratic as captured territory grows.
+ * - Center-bias: weak pull toward the open void so Qix stays dangerous.
+ * - Continuous collision: point-to-segment distance check against trail waypoints
+ *   prevents tunneling through thin player trails.
  */
 
 import { QIX_RADIUS, QIX_WANDER_JITTER, SPIDER_RADIUS } from '../constants';
@@ -11,16 +14,45 @@ import type { Dimensions } from '../types';
 import { getGridPos, isEmptyCell, isTrailCell } from './grid';
 import type { GameState } from './GameState';
 
+const QIX_TRAIL_LEN = 7;
+
+/** Squared distance from point (px,py) to segment (ax,ay)-(bx,by). */
+function pointToSegDistSq(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return (px - ax) ** 2 + (py - ay) ** 2;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+  return (px - (ax + t * dx)) ** 2 + (py - (ay + t * dy)) ** 2;
+}
+
 export function tickQix(
   state: GameState,
   dt: number,
   dims: Dimensions,
   onDeath: () => void,
 ): void {
-  const QIX_SPEED = dims.fieldWidth * 0.25;
+  const captureRatio = state.capturedPercent / 100;
+  const QIX_SPEED = dims.fieldWidth * 0.25 * (1 + captureRatio * 1.5);
+  const dynamicJitter = QIX_WANDER_JITTER * (1 + captureRatio * 3);
+  state.qixAngle += (Math.random() * 2 - 1) * dynamicJitter;
 
-  // ── Wander angle perturbation ────────────────────────────────────────────
-  state.qixAngle += (Math.random() * 2 - 1) * QIX_WANDER_JITTER;
+  // ── Center-bias: gentle pull toward void center ───────────────────────────
+  const cx = dims.fieldWidth / 2;
+  const cy = dims.fieldHeight / 2;
+  const toCX = cx - state.qixPos.x;
+  const toCY = cy - state.qixPos.y;
+  const distToCenter = Math.hypot(toCX, toCY);
+  const fieldDiag = Math.hypot(dims.fieldWidth, dims.fieldHeight) / 2;
+  if (distToCenter > 0) {
+    const centerAngle = Math.atan2(toCY, toCX);
+    const avoidStrength = 0.04 * (distToCenter / fieldDiag);
+    const angleDiff = Math.atan2(Math.sin(centerAngle - state.qixAngle), Math.cos(centerAngle - state.qixAngle));
+    state.qixAngle += angleDiff * avoidStrength;
+  }
 
   // ── Verlet: derive velocity from position history ────────────────────────
   let velX = state.qixPos.x - state.qixLastPos.x;
@@ -74,20 +106,35 @@ export function tickQix(
   nextX = Math.max(0, Math.min(dims.fieldWidth,  nextX));
   nextY = Math.max(0, Math.min(dims.fieldHeight, nextY));
 
-  // ── Update Verlet history ────────────────────────────────────────────────
+  // ── Update Verlet history + segment trail ────────────────────────────────
   state.qixLastPos = { ...state.qixPos };
-  state.qixPos     = { x: nextX, y: nextY };
-  // Keep qixVel in sync for any legacy reads
-  state.qixVel     = { x: velX, y: velY };
+  state.qixTrail.unshift({ ...state.qixPos });
+  if (state.qixTrail.length > QIX_TRAIL_LEN) state.qixTrail.length = QIX_TRAIL_LEN;
+  state.qixPos = { x: nextX, y: nextY };
+  state.qixVel = { x: velX, y: velY };
 
   // ── Collision detection ──────────────────────────────────────────────────
   if (state.playerDrawing) {
-    // Sample 8 points around QIX at QIX_RADIUS to detect NEWLINE trail cells
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
+    const rSq = QIX_RADIUS * QIX_RADIUS;
+
+    // Continuous: point-to-segment check against every trail waypoint pair
+    if (state.trail.length >= 2) {
+      for (let i = 1; i < state.trail.length; i++) {
+        const A = state.trail[i - 1];
+        const B = state.trail[i];
+        if (pointToSegDistSq(nextX, nextY, A.x, A.y, B.x, B.y) < rSq) {
+          onDeath();
+          return;
+        }
+      }
+    }
+
+    // Grid-based fallback: 12 radial sample points for NEWLINE cells
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
       const checkPos = {
-        x: state.qixPos.x + Math.cos(angle) * QIX_RADIUS,
-        y: state.qixPos.y + Math.sin(angle) * QIX_RADIUS,
+        x: nextX + Math.cos(angle) * QIX_RADIUS,
+        y: nextY + Math.sin(angle) * QIX_RADIUS,
       };
       const gp = getGridPos(checkPos, dims);
       if (isTrailCell(state.grid, gp.x, gp.y)) {
@@ -97,7 +144,7 @@ export function tickQix(
     }
 
     // Direct spider collision
-    if (Math.hypot(state.spiderPos.x - state.qixPos.x, state.spiderPos.y - state.qixPos.y) < QIX_RADIUS + SPIDER_RADIUS) {
+    if (Math.hypot(state.spiderPos.x - nextX, state.spiderPos.y - nextY) < QIX_RADIUS + SPIDER_RADIUS) {
       onDeath();
     }
   }
