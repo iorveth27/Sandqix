@@ -1,12 +1,8 @@
 /**
  * GameState — a single shared bag of mutable simulation state.
- *
- * All game systems (player, qix, sparks, territory) read from and write into
- * this object.  React refs in App.tsx point at the *same* underlying values;
- * the GameState is just a typed view so systems don't need to import React.
  */
 
-import { GRID_H, GRID_W } from '../constants';
+import { CELL, GRID_H, GRID_W } from '../constants';
 import {
   Direction,
   type FloatingText,
@@ -17,17 +13,9 @@ import {
 
 export interface GameState {
   // ── Territory ──────────────────────────────────────────────────────────
-  /** 0 = uncaptured, 1 = captured / safe */
+  /** 0=EMPTY, 1=FILLED, 2=LINE, 3=NEWLINE, 4=EDGE */
   grid: Uint8Array;
-  /** Horizontal seam edges (edge below cell y) */
-  seamsH: Uint8Array;
-  /** Vertical seam edges (edge right of cell x) */
-  seamsV: Uint8Array;
-  /** Per-capture cell masks stored for rendering history and seam lines */
-  historyStack: Uint8Array[];
-  /** Cells newly captured in the most recent capture (for wave-reveal animation) */
-  captureWaveMask: Uint8Array | null;
-  /** 0 → 1 progress of the wave-reveal animation */
+  /** 0→1 progress of the wave-reveal animation after each capture */
   captureWaveProgress: number;
 
   // ── Player ─────────────────────────────────────────────────────────────
@@ -35,10 +23,12 @@ export interface GameState {
   spiderDir: Direction;
   /** Active drawing trail (world-space waypoints) */
   trail: Point[];
-  /** Portion of the trail that was cut due to non-lethal self-intersection */
+  /** Kept for visual compatibility; always empty in new system */
   invalidLoop: Point[];
-  isOnSafe: boolean;
-  isTrailing: boolean;
+  /** True when player is on LINE/EDGE border (not drawing) */
+  playerOnBorder: boolean;
+  /** True when player is actively drawing a trail through EMPTY space */
+  playerDrawing: boolean;
   /** Sand grain particles spawned along the active trail */
   trailParticles: Particle[];
   /** Seconds the player has been stalling while drawing */
@@ -52,6 +42,10 @@ export interface GameState {
   // ── Enemies ────────────────────────────────────────────────────────────
   qixPos: Point;
   qixVel: Point;
+  /** Previous QIX position for Verlet integration */
+  qixLastPos: Point;
+  /** Current wander angle for QIX erratic movement */
+  qixAngle: number;
   sparks: SparkState[];
 
   // ── Visual effects ─────────────────────────────────────────────────────
@@ -66,22 +60,29 @@ export interface GameState {
   lives: number;
 }
 
-/** Create a fresh zeroed-out GameState (called on game start/restart) */
+/** Create a fresh GameState with EDGE border initialized */
 export function createGameState(): GameState {
+  const grid = new Uint8Array(GRID_W * GRID_H); // all 0 = EMPTY
+  // Set perimeter cells to EDGE (4)
+  for (let x = 0; x < GRID_W; x++) {
+    grid[0 * GRID_W + x] = CELL.EDGE;
+    grid[(GRID_H - 1) * GRID_W + x] = CELL.EDGE;
+  }
+  for (let y = 1; y < GRID_H - 1; y++) {
+    grid[y * GRID_W + 0] = CELL.EDGE;
+    grid[y * GRID_W + (GRID_W - 1)] = CELL.EDGE;
+  }
+
   return {
-    grid: new Uint8Array(GRID_W * GRID_H),
-    seamsH: new Uint8Array(GRID_W * GRID_H),
-    seamsV: new Uint8Array(GRID_W * GRID_H),
-    historyStack: [],
-    captureWaveMask: null,
+    grid,
     captureWaveProgress: 1,
 
     spiderPos: { x: 0, y: 0 },
     spiderDir: Direction.NONE,
     trail: [],
     invalidLoop: [],
-    isOnSafe: true,
-    isTrailing: false,
+    playerOnBorder: true,
+    playerDrawing: false,
     trailParticles: [],
     fuseTimer: 0,
 
@@ -91,6 +92,8 @@ export function createGameState(): GameState {
 
     qixPos: { x: 0, y: 0 },
     qixVel: { x: 0, y: 0 },
+    qixLastPos: { x: 0, y: 0 },
+    qixAngle: Math.PI / 4,
     sparks: [],
 
     particles: [],

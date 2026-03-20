@@ -1,37 +1,26 @@
 /**
- * sparks.ts — Spark enemy: ghost-edge traversal, perimeter patrol,
- * junction direction picking, spark–spark and spark–player collisions.
+ * sparks.ts — Spark enemies: LINE/EDGE patrol + ghost-edge traversal.
  *
- * Ghost Edge Traversal (migrating === true):
- *   When territory is captured, a displaced spark does NOT teleport.  It
- *   continues its current trajectory along the internalized seam lines.
- *   Only when it reaches a vertex (no more seam in the forward direction)
- *   does it jump to the nearest active perimeter cell and resume normal patrol.
+ * Normal mode: walks along LINE/EDGE cells. At each junction picks next cell —
+ * 'chaser' minimises Manhattan distance to player, 'random' picks randomly.
+ * Dead ends trigger a direction reversal.
+ *
+ * Ghost mode (migrating): spark moves through FILLED cells in a straight line
+ * toward a pre-computed target LINE/EDGE cell (set by territory.ts after a
+ * capture that isolates the spark). Rendered translucent while migrating.
  */
 
-import { CROSS_TIME_SECONDS, GRID_H, GRID_W, SPARK_RADIUS, SPARK_SPEED, SPIDER_RADIUS } from '../constants';
-import type { Dimensions, Point } from '../types';
-import { getGridPos, gridToWorld, isPerimeter, isSeamAdjacent, isSafe } from './grid';
+import { CELL, CROSS_TIME_SECONDS, GRID_H, GRID_W, SPARK_RADIUS, SPARK_SPEED, SPIDER_RADIUS } from '../constants';
+import type { Dimensions } from '../types';
+import { getGridPos, gridToWorld, isWalkable } from './grid';
 import type { GameState } from './GameState';
 
-const rotateCW  = (d: Point): Point => ({ x: -d.y, y:  d.x });
-const rotateCCW = (d: Point): Point => ({ x:  d.y, y: -d.x });
-
-/** Scan all grid cells and return the world-space position of the perimeter
- *  cell closest (Euclidean) to `from`.  Returns null if none exist. */
-function nearestPerimeterPos(grid: Uint8Array, from: Point, dims: Dimensions): Point | null {
-  let bestDist = Infinity;
-  let bestPos: Point | null = null;
-  for (let gy = 0; gy < GRID_H; gy++) {
-    for (let gx = 0; gx < GRID_W; gx++) {
-      if (!isPerimeter(grid, gx, gy)) continue;
-      const wp   = gridToWorld(gx, gy, dims);
-      const dist = Math.hypot(wp.x - from.x, wp.y - from.y);
-      if (dist < bestDist) { bestDist = dist; bestPos = wp; }
-    }
-  }
-  return bestPos;
-}
+const DIRS = [
+  { x:  0, y: -1 },
+  { x:  1, y:  0 },
+  { x:  0, y:  1 },
+  { x: -1, y:  0 },
+];
 
 export function tickSparks(
   state: GameState,
@@ -39,127 +28,133 @@ export function tickSparks(
   dims: Dimensions,
   onDeath: () => void,
 ): void {
-  const { fieldWidth: fw, fieldHeight: fh } = dims;
-  const baseSpeed  = (fw / CROSS_TIME_SECONDS) * SPARK_SPEED;
+  const baseSpeed  = (dims.fieldWidth / CROSS_TIME_SECONDS) * SPARK_SPEED;
   const sparkSpeed = baseSpeed * (1 + state.capturedPercent * 0.015);
 
-  // While player is drawing, sparks chase the trail entry point (last safe position)
-  const sparkTarget = state.isTrailing && state.trail.length > 0
-    ? state.trail[0]
-    : state.spiderPos;
+  const playerGP = getGridPos(state.spiderPos, dims);
 
   for (let si = 0; si < state.sparks.length; si++) {
-    let { pos, dir, rotation, migrating, migrateTarget, migratePath } = state.sparks[si];
+    let { pos, gx, gy, dir, type, migrating, targetGX, targetGY } = state.sparks[si];
     let remaining = sparkSpeed * dt;
 
-    while (remaining > 0) {
-      const step = Math.min(remaining, 2);
-      remaining -= step;
-
-      if (migrating) {
-        // ── Ghost Edge Traversal ──────────────────────────────────────────
-        // Continue in the current direction along the internalized seam line.
-        // On reaching a vertex (no seam ahead), jump to nearest active perimeter.
-        const tryPos = {
-          x: Math.max(0, Math.min(fw, pos.x + dir.x * step)),
-          y: Math.max(0, Math.min(fh, pos.y + dir.y * step)),
-        };
-        const tryGP = getGridPos(tryPos, dims);
-
-        if (isSafe(state.grid, tryGP.x, tryGP.y) && isPerimeter(state.grid, tryGP.x, tryGP.y)) {
-          // Reached the active perimeter — resume normal patrol
-          pos       = tryPos;
-          migrating = false;
-        } else if (isSafe(state.grid, tryGP.x, tryGP.y) &&
-                   isSeamAdjacent(state.seamsH, state.seamsV, tryGP.x, tryGP.y)) {
-          // Still on an internalized seam line — keep going
-          pos = tryPos;
-        } else {
-          // Vertex reached (seam ended or field edge hit).
-          // Jump instantly to the nearest active perimeter cell.
-          const jump = nearestPerimeterPos(state.grid, pos, dims);
-          if (jump) pos = jump;
-          migrating = false;
-          remaining = 0; // Stop advancing this tick after the jump
-        }
+    // ── Ghost mode: move straight toward targetGX/targetGY ─────────────────
+    if (migrating) {
+      const target = gridToWorld(targetGX, targetGY, dims);
+      const ddx = target.x - pos.x, ddy = target.y - pos.y;
+      const dist = Math.hypot(ddx, ddy);
+      if (dist > 0.5) {
+        const step = Math.min(remaining, dist);
+        pos = { x: pos.x + (ddx / dist) * step, y: pos.y + (ddy / dist) * step };
       } else {
-        // ── Normal perimeter patrol ───────────────────────────────────────
-        const tryPos = {
-          x: Math.max(0, Math.min(fw, pos.x + dir.x * step)),
-          y: Math.max(0, Math.min(fh, pos.y + dir.y * step)),
+        // Arrived at target — exit ghost mode
+        pos        = { ...target };
+        gx         = targetGX;
+        gy         = targetGY;
+        migrating  = false;
+      }
+      state.sparks[si] = { pos, gx, gy, dir, type, migrating, targetGX, targetGY };
+      continue;
+    }
+
+    // ── Normal patrol along LINE/EDGE cells ─────────────────────────────────
+    while (remaining > 0) {
+      const tgx = gx + dir.x;
+      const tgy = gy + dir.y;
+      const target = gridToWorld(tgx, tgy, dims);
+      const distToTarget = Math.hypot(target.x - pos.x, target.y - pos.y);
+
+      if (distToTarget > 0.5) {
+        const step = Math.min(remaining, distToTarget);
+        pos = {
+          x: pos.x + dir.x * step,
+          y: pos.y + dir.y * step,
         };
-        const tryGP  = getGridPos(tryPos, dims);
-        const didMove = tryPos.x !== pos.x || tryPos.y !== pos.y;
+        remaining -= step;
+      } else {
+        // Arrived at next cell — snap and pick new direction
+        pos = { ...target };
+        gx  = tgx;
+        gy  = tgy;
 
-        if (didMove && isSafe(state.grid, tryGP.x, tryGP.y) && isPerimeter(state.grid, tryGP.x, tryGP.y)) {
-          pos = tryPos;
-        } else {
-          // Junction: pick direction using rotation preference + shortest arc to player.
-          const backward = { x: -dir.x, y: -dir.y };
-          const rotTurn  = rotation === 1 ? rotateCW(dir)  : rotateCCW(dir);
-          const antiTurn = rotation === 1 ? rotateCCW(dir) : rotateCW(dir);
-          const priority = [rotTurn, dir, antiTurn, backward];
+        // Gather valid neighbors (walkable, no U-turn)
+        const candidates: { x: number; y: number }[] = [];
+        for (const d of DIRS) {
+          if (d.x === -dir.x && d.y === -dir.y) continue;
+          const nx = gx + d.x, ny = gy + d.y;
+          if (isWalkable(state.grid, nx, ny)) candidates.push(d);
+        }
 
-          const candidates: { d: Point; dist: number; priority: number }[] = [];
-          for (let pi = 0; pi < priority.length; pi++) {
-            const d    = priority[pi];
-            const cPos = {
-              x: Math.max(0, Math.min(fw, pos.x + d.x * 6)),
-              y: Math.max(0, Math.min(fh, pos.y + d.y * 6)),
-            };
-            if (cPos.x === pos.x && cPos.y === pos.y) continue;
-            const cGP = getGridPos(cPos, dims);
-            if (!isSafe(state.grid, cGP.x, cGP.y) || !isPerimeter(state.grid, cGP.x, cGP.y)) continue;
-            candidates.push({ d, dist: Math.hypot(cPos.x - sparkTarget.x, cPos.y - sparkTarget.y), priority: pi });
+        if (candidates.length === 0) {
+          // Try U-turn (reversal)
+          for (const d of DIRS) {
+            const nx = gx + d.x, ny = gy + d.y;
+            if (isWalkable(state.grid, nx, ny)) candidates.push(d);
           }
+        }
 
-          let bestDir: Point;
-          if (candidates.length === 0) {
-            bestDir = backward;
-          } else if (candidates.length === 1) {
-            bestDir = candidates[0].d;
-          } else {
-            // Bias strongly toward rotation preference unless other arc is >15% closer
-            candidates.sort((a, b) => a.priority - b.priority);
-            const rot  = candidates[0];
-            const best = candidates.reduce((a, b) => b.dist < a.dist ? b : a);
-            bestDir = best.dist < rot.dist * 0.85 ? best.d : rot.d;
+        if (candidates.length === 0) {
+          // Completely isolated — BFS through any cell to find nearest walkable
+          const bfsV = new Uint8Array(GRID_W * GRID_H);
+          const bfsQ: [number, number][] = [[gx, gy]];
+          bfsV[gy * GRID_W + gx] = 1;
+          let found = false;
+          while (bfsQ.length > 0 && !found) {
+            const [bx, by] = bfsQ.shift()!;
+            for (const d of DIRS) {
+              const nx = bx + d.x, ny = by + d.y;
+              if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
+              if (bfsV[ny * GRID_W + nx]) continue;
+              bfsV[ny * GRID_W + nx] = 1;
+              if (isWalkable(state.grid, nx, ny)) {
+                migrating = true;
+                targetGX  = nx;
+                targetGY  = ny;
+                found     = true;
+                break;
+              }
+              if (state.grid[ny * GRID_W + nx] !== CELL.EMPTY) bfsQ.push([nx, ny]);
+            }
           }
+          remaining = 0;
+          break;
+        }
 
-          if      (bestDir.x === rotateCW(dir).x  && bestDir.y === rotateCW(dir).y)  rotation = 1;
-          else if (bestDir.x === rotateCCW(dir).x && bestDir.y === rotateCCW(dir).y) rotation = -1;
-
+        // Pick next direction
+        if (type === 'chaser') {
+          let bestDist = Infinity;
+          let bestDir  = candidates[0];
+          for (const d of candidates) {
+            const dist = Math.abs((gx + d.x) - playerGP.x) + Math.abs((gy + d.y) - playerGP.y);
+            if (dist < bestDist) { bestDist = dist; bestDir = d; }
+          }
           dir = bestDir;
-          const newPos = {
-            x: Math.max(0, Math.min(fw, pos.x + dir.x * step)),
-            y: Math.max(0, Math.min(fh, pos.y + dir.y * step)),
-          };
-          const newGP = getGridPos(newPos, dims);
-          if (isSafe(state.grid, newGP.x, newGP.y) && isPerimeter(state.grid, newGP.x, newGP.y)) pos = newPos;
+        } else {
+          dir = candidates[Math.floor(Math.random() * candidates.length)];
         }
       }
     }
 
-    state.sparks[si] = { pos, dir, rotation, migrating, migrateTarget, migratePath };
+    state.sparks[si] = { pos, gx, gy, dir, type, migrating, targetGX, targetGY };
   }
 
-  // Spark–spark collision: reverse direction
+  // Spark–spark collision: reverse directions
   if (state.sparks.length >= 2) {
     const s0 = state.sparks[0];
     const s1 = state.sparks[1];
-    if (Math.hypot(s0.pos.x - s1.pos.x, s0.pos.y - s1.pos.y) < SPARK_RADIUS * 2) {
+    if (!s0.migrating && !s1.migrating &&
+        Math.hypot(s0.pos.x - s1.pos.x, s0.pos.y - s1.pos.y) < SPARK_RADIUS * 2) {
       state.sparks[0] = { ...s0, dir: { x: -s0.dir.x, y: -s0.dir.y } };
       state.sparks[1] = { ...s1, dir: { x: -s1.dir.x, y: -s1.dir.y } };
     }
   }
 
-  // Spark–player collision (only on boundary, with i-frames after damage)
-  if (state.isOnSafe && state.damageFlash <= 0) {
+  // Spark–player collision (only when player is on border, with i-frame protection)
+  if (state.playerOnBorder && state.damageFlash <= 0) {
     for (const spark of state.sparks) {
       if (spark.migrating) continue; // ghost sparks don't hurt
       if (Math.hypot(spark.pos.x - state.spiderPos.x, spark.pos.y - state.spiderPos.y) < SPARK_RADIUS + SPIDER_RADIUS) {
         onDeath();
-        break;
+        return;
       }
     }
   }

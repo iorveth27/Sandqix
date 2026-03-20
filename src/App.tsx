@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ASPECT_RATIO, FIELD_MARGIN, FUSE_MAX_TIME, GRID_H, GRID_W, UI_HEIGHT_RESERVE, WIN_PERCENT } from './constants';
+import { ASPECT_RATIO, CELL, FIELD_MARGIN, FUSE_MAX_TIME, GRID_H, GRID_W, UI_HEIGHT_RESERVE, WIN_PERCENT } from './constants';
 import { Direction, type Dimensions } from './types';
 import { playCaptureSound } from './audio';
 import { renderFrame } from './renderer';
@@ -12,7 +12,7 @@ import { HUD } from './components/HUD';
 import { Joystick } from './components/Joystick';
 import { Overlays } from './components/Overlays';
 import { createGameState } from './game/GameState';
-import { getGridPos, gridToWorld, isPerimeter } from './game/grid';
+import { getGridPos, gridToWorld, isWalkable } from './game/grid';
 import { fillCapturedArea } from './game/territory';
 import { tickPlayer } from './game/player';
 import { tickQix } from './game/qix';
@@ -32,17 +32,16 @@ export default function App() {
   const [capturedPercent, setCapturedPercent] = useState(0);
   const [lives,           setLives]           = useState(3);
 
-  // Single mutable game-state bag (replaces ~20 individual useRefs)
   const gs = useRef(createGameState());
 
-  const lastTime      = useRef<number>(0);
-  const requestRef    = useRef<number>();
-  const gameStateRef  = useRef(gameState);
-  const isPausedRef   = useRef(false);
+  const lastTime         = useRef<number>(0);
+  const requestRef       = useRef<number>();
+  const gameStateRef     = useRef(gameState);
+  const isPausedRef      = useRef(false);
   const sparksEnabledRef = useRef(true);
   const bossEnabledRef   = useRef(true);
   const fuseEnabledRef   = useRef(true);
-  const hasStarted    = useRef(false);
+  const hasStarted       = useRef(false);
 
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
   useEffect(() => { isPausedRef.current  = isPaused;  }, [isPaused]);
@@ -52,15 +51,32 @@ export default function App() {
 
   const startGame = (dims: Dimensions) => {
     const state = createGameState();
-    state.spiderPos = { x: 0, y: 0 };
-    state.qixPos    = { x: dims.fieldWidth / 2, y: dims.fieldHeight / 2 };
+
+    // Player starts at the middle of the top EDGE row so moving DOWN enters EMPTY immediately
+    state.spiderPos = { x: dims.fieldWidth / 2, y: 0 };
+
+    // QIX starts at center with random Verlet-seeded velocity
     const angle = Math.PI / 4 + Math.floor(Math.random() * 4) * (Math.PI / 2);
     const speed = dims.fieldWidth * 0.25;
-    state.qixVel = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
+    const dt0   = 1 / 60;
+    state.qixPos     = { x: dims.fieldWidth / 2, y: dims.fieldHeight / 2 };
+    state.qixLastPos = {
+      x: state.qixPos.x - Math.cos(angle) * speed * dt0,
+      y: state.qixPos.y - Math.sin(angle) * speed * dt0,
+    };
+    state.qixVel   = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
+    state.qixAngle = angle;
+
+    // Sparks start on the bottom EDGE row
+    const spark1gx = Math.round(0.25 * (GRID_W - 1));
+    const spark1gy = GRID_H - 1;
+    const spark2gx = Math.round(0.75 * (GRID_W - 1));
+    const spark2gy = GRID_H - 1;
     state.sparks = [
-      { pos: { x: dims.fieldWidth * 0.25, y: dims.fieldHeight }, dir: { x: -1, y: 0 }, rotation:  1, migrating: false, migrateTarget: null, migratePath: [] },
-      { pos: { x: dims.fieldWidth * 0.75, y: dims.fieldHeight }, dir: { x:  1, y: 0 }, rotation: -1, migrating: false, migrateTarget: null, migratePath: [] },
+      { pos: gridToWorld(spark1gx, spark1gy, dims), gx: spark1gx, gy: spark1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: spark1gx, targetGY: spark1gy },
+      { pos: gridToWorld(spark2gx, spark2gy, dims), gx: spark2gx, gy: spark2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: spark2gx, targetGY: spark2gy },
     ];
+
     gs.current = state;
     setGameState('PLAYING');
     setCapturedPercent(0);
@@ -144,48 +160,49 @@ export default function App() {
         return;
       }
 
-      // Respawn on the nearest accessible (perimeter) cell on the physical border.
-      // A plain border-edge snap can land on a captured border cell that isn't
-      // a perimeter cell, instantly softlocking the player.  Instead, scan every
-      // border grid cell and pick the uncaptured one closest to the death point.
-      const { fieldWidth: fw, fieldHeight: fh } = dimensions;
-      const { x: dx, y: dy } = state.spiderPos;
+      // Revert any active trail NEWLINE cells back to EMPTY
+      for (let i = 0; i < GRID_W * GRID_H; i++) {
+        if (state.grid[i] === CELL.NEWLINE) state.grid[i] = CELL.EMPTY;
+      }
 
+      // Respawn on the nearest EDGE/LINE cell on the physical border
+      const { x: dx, y: dy } = state.spiderPos;
       let bestDist = Infinity;
       let bestPos  = { x: 0, y: 0 };
+
       const checkBorderCell = (gx: number, gy: number) => {
-        if (!isPerimeter(state.grid, gx, gy)) return;
+        if (!isWalkable(state.grid, gx, gy)) return;
         const wp   = gridToWorld(gx, gy, dimensions);
         const dist = Math.hypot(wp.x - dx, wp.y - dy);
         if (dist < bestDist) { bestDist = dist; bestPos = wp; }
       };
+
       // Top and bottom rows
       for (let x = 0; x < GRID_W; x++) { checkBorderCell(x, 0); checkBorderCell(x, GRID_H - 1); }
       // Left and right columns (excluding corners already covered)
       for (let y = 1; y < GRID_H - 1; y++) { checkBorderCell(0, y); checkBorderCell(GRID_W - 1, y); }
 
-      // Fall back to plain border snap if every border cell is captured (near-win edge case)
-      if (bestDist === Infinity) {
-        const dLeft = dx, dRight = fw - dx, dTop = dy, dBottom = fh - dy;
-        const minD  = Math.min(dLeft, dRight, dTop, dBottom);
-        if      (minD === dLeft)  bestPos = { x: 0,  y: Math.max(0, Math.min(fh, dy)) };
-        else if (minD === dRight) bestPos = { x: fw, y: Math.max(0, Math.min(fh, dy)) };
-        else if (minD === dTop)   bestPos = { x: Math.max(0, Math.min(fw, dx)), y: 0  };
-        else                      bestPos = { x: Math.max(0, Math.min(fw, dx)), y: fh };
-      }
-      state.spiderPos = bestPos;
+      // Fallback: top-left corner (always EDGE)
+      if (bestDist === Infinity) bestPos = { x: 0, y: 0 };
 
-      state.spiderDir     = Direction.NONE;
-      state.trail         = [];
+      state.spiderPos      = bestPos;
+      state.spiderDir      = Direction.NONE;
+      state.trail          = [];
       state.trailParticles = [];
-      state.invalidLoop   = [];
+      state.invalidLoop    = [];
+      state.playerOnBorder = true;
+      state.playerDrawing  = false;
+      state.fuseTimer      = 0;
+
+      // Reset sparks to border positions
+      const spark1gx = Math.round(0.25 * (GRID_W - 1));
+      const spark1gy = GRID_H - 1;
+      const spark2gx = Math.round(0.75 * (GRID_W - 1));
+      const spark2gy = GRID_H - 1;
       state.sparks = [
-        { pos: { x: dimensions.fieldWidth * 0.25, y: dimensions.fieldHeight }, dir: { x: -1, y: 0 }, rotation:  1, migrating: false, migrateTarget: null, migratePath: [] },
-        { pos: { x: dimensions.fieldWidth * 0.75, y: dimensions.fieldHeight }, dir: { x:  1, y: 0 }, rotation: -1, migrating: false, migrateTarget: null, migratePath: [] },
+        { pos: gridToWorld(spark1gx, spark1gy, dimensions), gx: spark1gx, gy: spark1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: spark1gx, targetGY: spark1gy },
+        { pos: gridToWorld(spark2gx, spark2gy, dimensions), gx: spark2gx, gy: spark2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: spark2gx, targetGY: spark2gy },
       ];
-      state.isOnSafe   = true;
-      state.isTrailing = false;
-      state.fuseTimer  = 0;
     };
 
     const update = (time: number) => {
@@ -223,30 +240,28 @@ export default function App() {
 
       const state = gs.current;
       renderFrame(ctx, canvas, dimensions, {
-        grid:               state.grid,
-        historyStack:       state.historyStack,
-        trailParticles:     state.trailParticles,
-        trail:              state.trail,
-        invalidLoop:        state.invalidLoop,
-        isTrailing:         state.isTrailing,
-        isOnSafe:           state.isOnSafe,
-        spiderPos:          state.spiderPos,
-        particles:          state.particles,
-        floatingTexts:      state.floatingTexts,
-        captureFlash:       state.captureFlash,
-        damageFlash:        state.damageFlash,
-        qixPos:             state.qixPos,
-        sparks:             state.sparks.map(s => s.pos),
-        sparksEnabled:      sparksEnabledRef.current,
-        bossEnabled:        bossEnabledRef.current,
-        fuseProgress:       state.isTrailing ? state.fuseTimer / FUSE_MAX_TIME : 0,
-        animationTime:      state.animationTime,
-        bucketAngle:        state.bucketAngle,
-        bucketTilt:         state.bucketTilt,
-        bucketPitch:        state.bucketPitch,
-        captureWaveMask:    state.captureWaveMask,
+        grid:                state.grid,
+        trailParticles:      state.trailParticles,
+        trail:               state.trail,
+        invalidLoop:         state.invalidLoop,
+        playerDrawing:       state.playerDrawing,
+        playerOnBorder:      state.playerOnBorder,
+        spiderPos:           state.spiderPos,
+        particles:           state.particles,
+        floatingTexts:       state.floatingTexts,
+        captureFlash:        state.captureFlash,
+        damageFlash:         state.damageFlash,
+        qixPos:              state.qixPos,
+        sparks:              state.sparks.map(s => ({ pos: s.pos, migrating: s.migrating })),
+        sparksEnabled:       sparksEnabledRef.current,
+        bossEnabled:         bossEnabledRef.current,
+        fuseProgress:        state.playerDrawing ? state.fuseTimer / FUSE_MAX_TIME : 0,
+        animationTime:       state.animationTime,
+        bucketAngle:         state.bucketAngle,
+        bucketTilt:          state.bucketTilt,
+        bucketPitch:         state.bucketPitch,
         captureWaveProgress: state.captureWaveProgress,
-        isMoving:           state.spiderDir !== Direction.NONE,
+        isMoving:            state.spiderDir !== Direction.NONE,
       });
 
       requestRef.current = requestAnimationFrame(update);

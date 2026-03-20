@@ -1,10 +1,14 @@
 /**
- * qix.ts — Qix (boss) bouncing movement and collision detection.
+ * qix.ts — QIX erratic Verlet-based wandering movement.
+ *
+ * Replaces simple axis-bounce with a wander angle that's perturbed each frame
+ * via Verlet integration, giving the classic erratic QIX movement.
+ * Bounces off field edges and captured territory (non-EMPTY cells).
  */
 
-import { QIX_RADIUS, SPIDER_RADIUS } from '../constants';
+import { QIX_RADIUS, QIX_WANDER_JITTER, SPIDER_RADIUS } from '../constants';
 import type { Dimensions } from '../types';
-import { getGridPos, isSafe } from './grid';
+import { getGridPos, isEmptyCell, isTrailCell } from './grid';
 import type { GameState } from './GameState';
 
 export function tickQix(
@@ -13,52 +17,88 @@ export function tickQix(
   dims: Dimensions,
   onDeath: () => void,
 ): void {
-  const speed = Math.hypot(state.qixVel.x, state.qixVel.y);
-  let nextQx = state.qixPos.x + state.qixVel.x * dt;
-  let nextQy = state.qixPos.y + state.qixVel.y * dt;
+  const QIX_SPEED = dims.fieldWidth * 0.25;
 
-  // Bounce off safe zones and field edges (check each axis separately)
-  const gpX = getGridPos({ x: nextQx, y: state.qixPos.y }, dims);
-  const gpY = getGridPos({ x: state.qixPos.x, y: nextQy }, dims);
-  const hitX = nextQx < 0 || nextQx > dims.fieldWidth  || isSafe(state.grid, gpX.x, gpX.y);
-  const hitY = nextQy < 0 || nextQy > dims.fieldHeight || isSafe(state.grid, gpY.x, gpY.y);
+  // ── Wander angle perturbation ────────────────────────────────────────────
+  state.qixAngle += (Math.random() * 2 - 1) * QIX_WANDER_JITTER;
+
+  // ── Verlet: derive velocity from position history ────────────────────────
+  let velX = state.qixPos.x - state.qixLastPos.x;
+  let velY = state.qixPos.y - state.qixLastPos.y;
+
+  // Blend wander direction into velocity
+  const wanderBlend = 0.15;
+  velX += Math.cos(state.qixAngle) * wanderBlend;
+  velY += Math.sin(state.qixAngle) * wanderBlend;
+
+  // Normalize to constant speed
+  const spd = Math.hypot(velX, velY);
+  if (spd > 0) {
+    const step = QIX_SPEED * dt;
+    velX = (velX / spd) * step;
+    velY = (velY / spd) * step;
+  }
+
+  let nextX = state.qixPos.x + velX;
+  let nextY = state.qixPos.y + velY;
+
+  // ── Bounce off field edges and non-EMPTY territory ───────────────────────
+  const gpX = getGridPos({ x: nextX, y: state.qixPos.y }, dims);
+  const gpY = getGridPos({ x: state.qixPos.x, y: nextY }, dims);
+
+  const hitX = nextX < 0 || nextX > dims.fieldWidth  || !isEmptyCell(state.grid, gpX.x, gpX.y);
+  const hitY = nextY < 0 || nextY > dims.fieldHeight || !isEmptyCell(state.grid, gpY.x, gpY.y);
 
   if (hitX) {
-    state.qixVel.x = -state.qixVel.x;
-    nextQx = state.qixPos.x + state.qixVel.x * dt;
+    velX = -velX;
+    nextX = state.qixPos.x + velX;
+    state.qixAngle = Math.PI - state.qixAngle;
   }
   if (hitY) {
-    state.qixVel.y = -state.qixVel.y;
-    nextQy = state.qixPos.y + state.qixVel.y * dt;
+    velY = -velY;
+    nextY = state.qixPos.y + velY;
+    state.qixAngle = -state.qixAngle;
   }
 
-  // If still stuck (corner), reverse both and hold position
-  const finalGP = getGridPos({ x: nextQx, y: nextQy }, dims);
-  if (isSafe(state.grid, finalGP.x, finalGP.y)) {
-    state.qixVel.x = -state.qixVel.x;
-    state.qixVel.y = -state.qixVel.y;
-    nextQx = state.qixPos.x;
-    nextQy = state.qixPos.y;
+  // Corner correction: if still stuck, reverse completely
+  const finalGP = getGridPos({ x: nextX, y: nextY }, dims);
+  if (!isEmptyCell(state.grid, finalGP.x, finalGP.y)) {
+    velX = -velX;
+    velY = -velY;
+    nextX = state.qixPos.x + velX;
+    nextY = state.qixPos.y + velY;
+    state.qixAngle += Math.PI;
   }
 
-  // Re-normalise speed in case of floating-point drift
-  const currentSpeed = Math.hypot(state.qixVel.x, state.qixVel.y);
-  if (currentSpeed > 0 && Math.abs(currentSpeed - speed) > 1) {
-    state.qixVel.x = (state.qixVel.x / currentSpeed) * speed;
-    state.qixVel.y = (state.qixVel.y / currentSpeed) * speed;
-  }
+  // Clamp to field bounds
+  nextX = Math.max(0, Math.min(dims.fieldWidth,  nextX));
+  nextY = Math.max(0, Math.min(dims.fieldHeight, nextY));
 
-  state.qixPos = { x: nextQx, y: nextQy };
+  // ── Update Verlet history ────────────────────────────────────────────────
+  state.qixLastPos = { ...state.qixPos };
+  state.qixPos     = { x: nextX, y: nextY };
+  // Keep qixVel in sync for any legacy reads
+  state.qixVel     = { x: velX, y: velY };
 
-  // Collision detection (only while player is drawing a trail)
-  if (state.isTrailing) {
-    const qixHitsTrail = state.trail.some(p =>
-      Math.hypot(p.x - state.qixPos.x, p.y - state.qixPos.y) < QIX_RADIUS + 3,
-    );
-    const qixHitsSpider =
-      Math.hypot(state.spiderPos.x - state.qixPos.x, state.spiderPos.y - state.qixPos.y) <
-      QIX_RADIUS + SPIDER_RADIUS;
+  // ── Collision detection ──────────────────────────────────────────────────
+  if (state.playerDrawing) {
+    // Sample 8 points around QIX at QIX_RADIUS to detect NEWLINE trail cells
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const checkPos = {
+        x: state.qixPos.x + Math.cos(angle) * QIX_RADIUS,
+        y: state.qixPos.y + Math.sin(angle) * QIX_RADIUS,
+      };
+      const gp = getGridPos(checkPos, dims);
+      if (isTrailCell(state.grid, gp.x, gp.y)) {
+        onDeath();
+        return;
+      }
+    }
 
-    if (qixHitsTrail || qixHitsSpider) onDeath();
+    // Direct spider collision
+    if (Math.hypot(state.spiderPos.x - state.qixPos.x, state.spiderPos.y - state.qixPos.y) < QIX_RADIUS + SPIDER_RADIUS) {
+      onDeath();
+    }
   }
 }

@@ -1,190 +1,229 @@
 /**
- * territory.ts — fillCapturedArea: Bresenham trail stamp, BFS flood-fill,
- * border extension, player snap, spark migration BFS.
+ * territory.ts — fillCapturedArea: dual-seed BFS fill.
  *
- * Returns the number of percentage points newly captured (0 if nothing changed).
- * Mutates GameState in place; callers are responsible for React state updates
- * (setCapturedPercent) and audio (playCaptureSound).
+ * Algorithm:
+ *  1. Bresenham-stamp any trail gaps as NEWLINE.
+ *  2. Two BFS from seeds perpendicular to player's last direction.
+ *  3. Overlap check: if region1 + region2 > totalEmpty, both seeds are in
+ *     the same connected component (trail too short to divide the field).
+ *     In that case, revert NEWLINE→EMPTY and return 0 (no capture).
+ *  4. Fill the smaller enclosed region with FILLED; NEWLINE→LINE.
+ *  5. Rescue trapped QIX and set up ghost traversal for isolated sparks.
  */
 
-import { GRID_H, GRID_W } from '../constants';
-import type { Dimensions } from '../types';
-import { getGridPos, gridToWorld, isPerimeter, isSafe } from './grid';
+import { CELL, GRID_H, GRID_W } from '../constants';
+import { Direction, type Dimensions } from '../types';
+import { getGridPos, gridToWorld, isEmptyCell, isWalkable } from './grid';
 import type { GameState } from './GameState';
 
+const DIRS4 = [[-1,0],[1,0],[0,-1],[0,1]] as [number,number][];
+
 export function fillCapturedArea(state: GameState, dims: Dimensions): number {
-  const { grid, seamsH, seamsV, trail, particles, floatingTexts } = state;
+  const { grid, trail, particles, floatingTexts } = state;
 
-  // ── 1. Determine Qix BFS seed BEFORE stamping the trail ─────────────────
-  // (After stamping, trail cells become safe and the seed check would fire wrong)
-  const qixGPpre = getGridPos(state.qixPos, dims);
-  const preSeedX = qixGPpre.x, preSeedY = qixGPpre.y;
-  const preSeedValid = !isSafe(grid, preSeedX, preSeedY);
-
-  // ── 2. Stamp trail into grid using Bresenham lines ───────────────────────
-  const stampSeams = (x: number, y: number) => {
-    if (y < GRID_H - 1) seamsH[y * GRID_W + x] = 1;
-    if (y > 0) seamsH[(y - 1) * GRID_W + x] = 1;
-    if (x < GRID_W - 1) seamsV[y * GRID_W + x] = 1;
-    if (x > 0) seamsV[y * GRID_W + (x - 1)] = 1;
-  };
-  for (let ti = 0; ti < trail.length; ti++) {
-    const gp = getGridPos(trail[ti], dims);
-    if (ti === 0) {
-      grid[gp.y * GRID_W + gp.x] = 1;
-      stampSeams(gp.x, gp.y);
-    } else {
-      const prev = getGridPos(trail[ti - 1], dims);
-      let x = prev.x, y = prev.y;
-      const dx = Math.abs(gp.x - prev.x), sx = prev.x < gp.x ? 1 : -1;
-      const dy = -Math.abs(gp.y - prev.y), sy = prev.y < gp.y ? 1 : -1;
-      let err = dx + dy;
-      while (true) {
-        if (x >= 0 && x < GRID_W && y >= 0 && y < GRID_H) {
-          grid[y * GRID_W + x] = 1;
-          stampSeams(x, y);
-        }
-        if (x === gp.x && y === gp.y) break;
-        const e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x += sx; }
-        if (e2 <= dx) { err += dx; y += sy; }
+  // ── 1. Bresenham-stamp trail gaps as NEWLINE ─────────────────────────────
+  for (let ti = 1; ti < trail.length; ti++) {
+    const p0 = getGridPos(trail[ti - 1], dims);
+    const p1 = getGridPos(trail[ti],     dims);
+    let x = p0.x, y = p0.y;
+    const dx = Math.abs(p1.x - p0.x), sx = p0.x < p1.x ? 1 : -1;
+    const dy = -Math.abs(p1.y - p0.y), sy = p0.y < p1.y ? 1 : -1;
+    let err = dx + dy;
+    while (true) {
+      if (x >= 0 && x < GRID_W && y >= 0 && y < GRID_H) {
+        if (grid[y * GRID_W + x] === CELL.EMPTY) grid[y * GRID_W + x] = CELL.NEWLINE;
       }
+      if (x === p1.x && y === p1.y) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x += sx; }
+      else          { err += dx; y += sy; }
     }
   }
 
-  // ── 3. Flood fill from Qix — mark cells reachable from Qix ──────────────
-  const visited = new Uint8Array(GRID_W * GRID_H);
-  let seedX = preSeedX, seedY = preSeedY;
-  let foundSeed = preSeedValid;
+  // ── 2. Compute seed positions based on player's last direction ────────────
+  const cp = getGridPos(state.spiderPos, dims);
+  const cx = cp.x, cy = cp.y;
 
-  if (!foundSeed) {
-    // Qix was on safe territory — scan outward for nearest uncaptured cell
-    const scanV = new Uint8Array(GRID_W * GRID_H);
-    const scanQ: [number, number][] = [[seedX, seedY]];
-    scanV[seedY * GRID_W + seedX] = 1;
-    outerScan: while (scanQ.length > 0) {
-      const [cx, cy] = scanQ.shift()!;
-      for (const [ddx, ddy] of [[-1,0],[1,0],[0,-1],[0,1]] as [number,number][]) {
-        const nx = cx + ddx, ny = cy + ddy;
-        if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-        if (scanV[ny * GRID_W + nx]) continue;
-        scanV[ny * GRID_W + nx] = 1;
-        if (!isSafe(grid, nx, ny)) { seedX = nx; seedY = ny; foundSeed = true; break outerScan; }
-        scanQ.push([nx, ny]);
-      }
-    }
+  let seed1 = { x: -1, y: -1 }, seed2 = { x: -1, y: -1 };
+  switch (state.spiderDir) {
+    case Direction.LEFT:
+      seed1 = { x: cx + 1, y: cy - 1 };
+      seed2 = { x: cx + 1, y: cy + 1 };
+      break;
+    case Direction.RIGHT:
+      seed1 = { x: cx - 1, y: cy - 1 };
+      seed2 = { x: cx - 1, y: cy + 1 };
+      break;
+    case Direction.UP:
+      seed1 = { x: cx - 1, y: cy + 1 };
+      seed2 = { x: cx + 1, y: cy + 1 };
+      break;
+    case Direction.DOWN:
+      seed1 = { x: cx - 1, y: cy - 1 };
+      seed2 = { x: cx + 1, y: cy - 1 };
+      break;
+    default:
+      seed1 = { x: cx + 1, y: cy };
+      seed2 = { x: cx - 1, y: cy };
+      break;
   }
 
-  if (foundSeed) {
-    const queue: [number, number][] = [[seedX, seedY]];
-    visited[seedY * GRID_W + seedX] = 1;
+  // ── 3. BFS from each seed through EMPTY cells ────────────────────────────
+  const bfsEmpty = (sx: number, sy: number): number[] => {
+    if (sx < 0 || sx >= GRID_W || sy < 0 || sy >= GRID_H) return [];
+    if (!isEmptyCell(grid, sx, sy)) return [];
+
+    const visited = new Uint8Array(GRID_W * GRID_H);
+    const queue: [number, number][] = [[sx, sy]];
+    const cells: number[] = [];
+    visited[sy * GRID_W + sx] = 1;
+
     while (queue.length > 0) {
-      const [cx, cy] = queue.shift()!;
-      for (const [nx, ny] of [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]] as [number,number][]) {
-        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H
-            && !isSafe(grid, nx, ny) && !visited[ny * GRID_W + nx]) {
-          visited[ny * GRID_W + nx] = 1;
-          queue.push([nx, ny]);
-        }
-      }
-    }
-  }
-
-  // ── 4. Capture everything not reachable from Qix ────────────────────────
-  state.captureWaveMask = new Uint8Array(GRID_W * GRID_H);
-  state.captureWaveProgress = foundSeed ? 0 : 1;
-  if (foundSeed) {
-    for (let i = 0; i < GRID_W * GRID_H; i++) {
-      const x = i % GRID_W;
-      const y = Math.floor(i / GRID_W);
-      const onBorder = x === 0 || x === GRID_W - 1 || y === 0 || y === GRID_H - 1;
-      if (!visited[i] && !onBorder) {
-        if (grid[i] !== 1) state.captureWaveMask[i] = 1;
-        grid[i] = 1;
-      }
-    }
-  }
-
-  // ── 5. Extend captured area to border cells whose inward neighbor is captured
-  for (let x = 0; x < GRID_W; x++) {
-    if (grid[1 * GRID_W + x] === 1) grid[0 * GRID_W + x] = 1;
-    if (grid[(GRID_H - 2) * GRID_W + x] === 1) grid[(GRID_H - 1) * GRID_W + x] = 1;
-  }
-  for (let y = 0; y < GRID_H; y++) {
-    if (grid[y * GRID_W + 1] === 1) grid[y * GRID_W + 0] = 1;
-    if (grid[y * GRID_W + (GRID_W - 2)] === 1) grid[y * GRID_W + (GRID_W - 1)] = 1;
-  }
-
-  // ── 6. Snap player to nearest perimeter cell if surrounded by new territory
-  const playerGP = getGridPos(state.spiderPos, dims);
-  if (isSafe(grid, playerGP.x, playerGP.y) && !isPerimeter(grid, playerGP.x, playerGP.y)) {
-    const bfsVisited = new Uint8Array(GRID_W * GRID_H);
-    const bfsQueue: [number, number][] = [[playerGP.x, playerGP.y]];
-    bfsVisited[playerGP.y * GRID_W + playerGP.x] = 1;
-    let found: [number, number] | null = null;
-    outer: while (bfsQueue.length > 0) {
-      const [cx, cy] = bfsQueue.shift()!;
-      for (const [nx, ny] of [[cx+1,cy],[cx-1,cy],[cx,cy+1],[cx,cy-1]] as [number,number][]) {
+      const [qx, qy] = queue.shift()!;
+      cells.push(qy * GRID_W + qx);
+      for (const [ddx, ddy] of DIRS4) {
+        const nx = qx + ddx, ny = qy + ddy;
         if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-        if (bfsVisited[ny * GRID_W + nx]) continue;
-        bfsVisited[ny * GRID_W + nx] = 1;
-        if (isSafe(grid, nx, ny) && isPerimeter(grid, nx, ny)) { found = [nx, ny]; break outer; }
-        if (isSafe(grid, nx, ny)) bfsQueue.push([nx, ny]);
+        if (visited[ny * GRID_W + nx]) continue;
+        if (!isEmptyCell(grid, nx, ny)) continue;
+        visited[ny * GRID_W + nx] = 1;
+        queue.push([nx, ny]);
       }
     }
-    if (found) state.spiderPos = gridToWorld(found[0], found[1], dims);
+    return cells;
+  };
+
+  const region1 = bfsEmpty(seed1.x, seed1.y);
+  const region2 = bfsEmpty(seed2.x, seed2.y);
+
+  // ── 4. Overlap check — detect degenerate (non-enclosing) trail ───────────
+  let totalEmpty = 0;
+  for (let i = 0; i < GRID_W * GRID_H; i++) {
+    if (grid[i] === CELL.EMPTY) totalEmpty++;
   }
 
-  // ── 7. Spark delayed-edge migration ────────────────────────────────────
-  // Find all perimeter cells reachable from the player via perimeter-only BFS
-  const activePerimeter = new Uint8Array(GRID_W * GRID_H);
-  {
-    const playerGP2 = getGridPos(state.spiderPos, dims);
-    if (isSafe(grid, playerGP2.x, playerGP2.y) && isPerimeter(grid, playerGP2.x, playerGP2.y)) {
-      const pQ: [number, number][] = [[playerGP2.x, playerGP2.y]];
-      activePerimeter[playerGP2.y * GRID_W + playerGP2.x] = 1;
-      while (pQ.length > 0) {
-        const [cx, cy] = pQ.shift()!;
-        for (const [ddx, ddy] of [[-1,0],[1,0],[0,-1],[0,1]] as [number,number][]) {
-          const nx = cx + ddx, ny = cy + ddy;
+  // If both seeds are in the same connected component their counts sum > totalEmpty.
+  // Also guard the single-valid-seed case: if the only valid region covers > 50%
+  // of empty space it is the exterior, not an enclosed area.
+  const r1ok = region1.length > 0;
+  const r2ok = region2.length > 0;
+  const overlap = region1.length + region2.length > totalEmpty;
+
+  let toFill: number[] = [];
+  if (r1ok && r2ok && !overlap) {
+    // Valid partition — fill the smaller enclosed region
+    toFill = region1.length <= region2.length ? region1 : region2;
+  } else if (r1ok && !r2ok && region1.length <= totalEmpty * 0.5) {
+    toFill = region1; // seed2 was on NEWLINE/invalid; r1 is the enclosed area
+  } else if (r2ok && !r1ok && region2.length <= totalEmpty * 0.5) {
+    toFill = region2;
+  }
+  // else: degenerate trail (both seeds in same component, or both invalid) → fill nothing
+
+  if (toFill.length === 0) {
+    // No meaningful enclosure — revert NEWLINE→EMPTY and bail out
+    for (let i = 0; i < GRID_W * GRID_H; i++) {
+      if (grid[i] === CELL.NEWLINE) grid[i] = CELL.EMPTY;
+    }
+    state.trail          = [];
+    state.invalidLoop    = [];
+    state.playerOnBorder = true;
+    state.playerDrawing  = false;
+    state.fuseTimer      = 0;
+    state.trailParticles = [];
+    return 0;
+  }
+
+  // ── 5. Apply fill ─────────────────────────────────────────────────────────
+  for (const idx of toFill) {
+    grid[idx] = CELL.FILLED;
+  }
+
+  // ── 6. Convert NEWLINE → LINE ────────────────────────────────────────────
+  for (let i = 0; i < GRID_W * GRID_H; i++) {
+    if (grid[i] === CELL.NEWLINE) grid[i] = CELL.LINE;
+  }
+
+  // ── 7. Ghost-edge traversal: sparks isolated by the new capture ──────────
+  for (const spark of state.sparks) {
+    if (spark.migrating) continue; // already in ghost mode
+    // Check whether the spark has at least one walkable neighbor
+    let hasEscape = isWalkable(grid, spark.gx, spark.gy);
+    if (hasEscape) {
+      for (const [ddx, ddy] of DIRS4) {
+        if (isWalkable(grid, spark.gx + ddx, spark.gy + ddy)) { hasEscape = true; break; }
+      }
+    }
+    if (!hasEscape) {
+      // BFS through any non-EMPTY cell to find nearest walkable — ghost mode
+      const bv  = new Uint8Array(GRID_W * GRID_H);
+      const bq: [number, number][] = [[spark.gx, spark.gy]];
+      bv[spark.gy * GRID_W + spark.gx] = 1;
+      let found = false;
+      while (bq.length > 0 && !found) {
+        const [bx, by] = bq.shift()!;
+        for (const [ddx, ddy] of DIRS4) {
+          const nx = bx + ddx, ny = by + ddy;
           if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-          if (activePerimeter[ny * GRID_W + nx]) continue;
-          if (!isSafe(grid, nx, ny) || !isPerimeter(grid, nx, ny)) continue;
-          activePerimeter[ny * GRID_W + nx] = 1;
-          pQ.push([nx, ny]);
+          if (bv[ny * GRID_W + nx]) continue;
+          bv[ny * GRID_W + nx] = 1;
+          if (isWalkable(grid, nx, ny)) {
+            spark.migrating = true;
+            spark.targetGX  = nx;
+            spark.targetGY  = ny;
+            found = true;
+            break;
+          }
+          bq.push([nx, ny]);
         }
       }
     }
   }
 
-  // Sparks not on the active perimeter enter ghost mode: they continue their
-  // current trajectory along the internalized seam lines and jump to the
-  // nearest active perimeter cell when they reach a vertex.  No path is
-  // pre-computed here — sparks.ts handles traversal each tick.
-  state.sparks = state.sparks.map(spark => {
-    const sgp = getGridPos(spark.pos, dims);
-    if (activePerimeter[sgp.y * GRID_W + sgp.x]) return spark;
-    return { ...spark, migrating: true, migrateTarget: null, migratePath: [] };
-  });
+  // ── 8. Handle QIX trapped in non-EMPTY territory ─────────────────────────
+  const qixGP = getGridPos(state.qixPos, dims);
+  if (!isEmptyCell(grid, qixGP.x, qixGP.y)) {
+    const qbfs = new Uint8Array(GRID_W * GRID_H);
+    const qqueue: [number, number][] = [[qixGP.x, qixGP.y]];
+    qbfs[qixGP.y * GRID_W + qixGP.x] = 1;
+    let rescued = false;
+    while (qqueue.length > 0 && !rescued) {
+      const [qx, qy] = qqueue.shift()!;
+      for (const [ddx, ddy] of DIRS4) {
+        const nx = qx + ddx, ny = qy + ddy;
+        if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
+        if (qbfs[ny * GRID_W + nx]) continue;
+        qbfs[ny * GRID_W + nx] = 1;
+        if (isEmptyCell(grid, nx, ny)) {
+          state.qixPos     = gridToWorld(nx, ny, dims);
+          state.qixLastPos = { ...state.qixPos };
+          rescued = true;
+          break;
+        }
+        qqueue.push([nx, ny]);
+      }
+    }
+  }
 
-  // ── 8. Count captured cells, emit effects, reset drawing state ──────────
+  // ── 9. Count captured cells, emit effects, reset drawing state ───────────
   let filledCount = 0;
   for (let i = 0; i < GRID_W * GRID_H; i++) {
-    if (grid[i] === 1) filledCount++;
+    if (grid[i] === CELL.FILLED || grid[i] === CELL.LINE) filledCount++;
   }
-  const newPercent = Math.floor((filledCount / (GRID_W * GRID_H)) * 100);
+  const newPercent       = Math.floor((filledCount / (GRID_W * GRID_H)) * 100);
   const capturedThisTime = newPercent - state.capturedPercent;
 
   if (capturedThisTime > 0) {
-    state.captureFlash = 0.6;
+    state.captureFlash        = 0.6;
+    state.captureWaveProgress = 0;
 
     trail.forEach((p, idx) => {
       if (idx % 2 === 0) {
         for (let i = 0; i < 2; i++) {
           const rc = Math.random();
           particles.push({
-            pos: { ...p },
-            vel: { x: (Math.random() - 0.5) * 120, y: (Math.random() - 0.5) * 120 },
+            pos:  { ...p },
+            vel:  { x: (Math.random() - 0.5) * 120, y: (Math.random() - 0.5) * 120 },
             color: rc > 0.6 ? '#E8A840' : rc > 0.3 ? '#C87A30' : '#F5D080',
             life: 0.4 + Math.random() * 0.6,
             maxLife: 1,
@@ -195,21 +234,20 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     });
 
     floatingTexts.push({
-      pos: { ...state.spiderPos },
-      text: `+${capturedThisTime}%`,
-      life: 1.5,
+      pos:     { ...state.spiderPos },
+      text:    `+${capturedThisTime}%`,
+      life:    1.5,
       maxLife: 1.5,
     });
   }
 
   state.capturedPercent = newPercent;
-  state.trail = [];
-  state.invalidLoop = [];
-  state.isOnSafe = true;
-  state.isTrailing = false;
-  state.fuseTimer = 0;
-  state.historyStack.push(new Uint8Array(state.captureWaveMask));
-  state.trailParticles = [];
+  state.trail           = [];
+  state.invalidLoop     = [];
+  state.playerOnBorder  = true;
+  state.playerDrawing   = false;
+  state.fuseTimer       = 0;
+  state.trailParticles  = [];
 
   return capturedThisTime;
 }

@@ -36,13 +36,16 @@ export enum Direction {
   RIGHT,
 }
 
-/** A spark enemy that patrols the field perimeter */
+/** A spark enemy that patrols the field border (LINE/EDGE cells) */
 export interface SparkState {
-  pos: Point;
-  dir: Point;
-  /** Preferred rotation direction at junctions: 1 = CW, -1 = CCW */
-  rotation: 1 | -1;
+  pos: Point;       // world-space position (for smooth rendering)
+  gx: number;       // current grid cell x
+  gy: number;       // current grid cell y
+  dir: Point;       // cardinal unit direction vector
+  type: 'chaser' | 'random';
+  /** True while traversing captured territory to reach the active border */
   migrating: boolean;
-  migrateTarget: Point | null;
-  migratePath: Point[];
+  /** Ghost target grid cell (only valid when migrating) */
+  targetGX: number;
+  targetGY: number;
 }

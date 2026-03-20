@@ -4,6 +4,9 @@ export const FIELD_MARGIN = 0.05;
 export const GRID_W = 100;
 export const GRID_H = Math.round(GRID_W / ASPECT_RATIO);
 
+// ─── Cell types ────────────────────────────────────────────────────────────
+export const CELL = { EMPTY: 0, FILLED: 1, LINE: 2, NEWLINE: 3, EDGE: 4 } as const;
+
 // ─── Gameplay timing ───────────────────────────────────────────────────────
 /** Seconds for the player to cross the full field width */
 export const CROSS_TIME_SECONDS = 2;
@@ -21,6 +24,9 @@ export const SPARK_SPEED = 0.3;
 
 // ─── Win condition ─────────────────────────────────────────────────────────
 export const WIN_PERCENT = 80;
+
+// ─── QIX wandering ─────────────────────────────────────────────────────────
+export const QIX_WANDER_JITTER = 0.3;
 
 // ─── HUD layout ────────────────────────────────────────────────────────────
 export const UI_HEIGHT_RESERVE = 110;
