@@ -66,6 +66,7 @@ export default function App() {
   const [lives,           setLives]           = useState(3);
   const [level,           setLevel]           = useState(1);
   const [score,           setScore]           = useState(0);
+  const [highscore,       setHighscore]       = useState(() => parseInt(localStorage.getItem('highscore') ?? '0', 10));
   const [levelBonus,      setLevelBonus]      = useState(0);
   const [loopKey,         setLoopKey]         = useState(0);
 
@@ -79,6 +80,7 @@ export default function App() {
   const bossEnabledRef      = useRef(true);
   const fuseEnabledRef      = useRef(true);
   const hasStarted = useRef(false);
+  const highscoreRef = useRef(parseInt(localStorage.getItem('highscore') ?? '0', 10));
 
   const setStage = (s: GameStage) => {
     gameStageRef.current = s;
@@ -124,7 +126,7 @@ export default function App() {
       state.qixEntities.push(makeQix(dims.fieldWidth * 2 / 3, dims.fieldHeight / 3));
     }
 
-    state.lives = opts?.lives ?? 3;
+    state.lives = Math.min(opts?.lives ?? 3, 3);
     state.score = opts?.score ?? 0;
     state.level = lvl;
 
@@ -305,7 +307,19 @@ export default function App() {
           const captured = fillCapturedArea(state, dimensions);
           if (captured > 0) {
             playCaptureSound();
-            state.score += captured * 100;
+            const earned = Math.round(Math.pow(captured, 1.8) * 80);
+            state.score += earned;
+            state.floatingTexts.push({
+              pos: { ...state.spiderPos },
+              text: `+${earned.toLocaleString()}`,
+              life: 1.8,
+              maxLife: 1.8,
+            });
+            if (state.score > (highscoreRef.current ?? 0)) {
+              highscoreRef.current = state.score;
+              setHighscore(state.score);
+              localStorage.setItem('highscore', String(state.score));
+            }
             setScore(state.score);
             setCapturedPercent(state.capturedPercent);
           }
@@ -323,10 +337,13 @@ export default function App() {
           const bonus = overCapture * BONUS_PER_PERCENT;
           state.levelBonus = bonus;
           state.score += bonus;
-          state.lives = Math.min(state.lives + 1, 5);
           setLevelBonus(bonus);
-          setLives(state.lives);
           setScore(state.score);
+          if (state.score > highscoreRef.current) {
+            highscoreRef.current = state.score;
+            setHighscore(state.score);
+            localStorage.setItem('highscore', String(state.score));
+          }
           setStage('LEVEL_CLEAR');
         }
       } else if (stage === 'LEVEL_CLEAR') {
@@ -448,10 +465,9 @@ export default function App() {
     <div className="fixed inset-0 flex flex-col overflow-hidden touch-none select-none font-sans" style={{ background: '#0d0820' }}>
       <HUD
         isVisible={gameStage === 'PLAYING' || gameStage === 'LEVEL_CLEAR'}
-        capturedPercent={capturedPercent}
         lives={lives}
-        level={level}
         score={score}
+        highscore={highscore}
         onPause={() => setIsPaused(true)}
       />
 

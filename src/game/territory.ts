@@ -235,12 +235,7 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
       }
     });
 
-    floatingTexts.push({
-      pos:     { ...state.spiderPos },
-      text:    `+${capturedThisTime}%`,
-      life:    1.5,
-      maxLife: 1.5,
-    });
+    // Score floating text is pushed by App.tsx (which knows the exponential formula)
   }
 
   state.capturedPercent = newPercent;

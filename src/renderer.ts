@@ -108,6 +108,9 @@ const BUCKET_SVG = `<svg width="84" height="84" viewBox="0 0 100 100" xmlns="htt
 const bucketImg = new Image();
 bucketImg.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(BUCKET_SVG);
 
+const burnyLogoImg = new Image();
+burnyLogoImg.src = '/burnygames_logo.png';
+
 function hashFloat(a: number, b: number): number {
   let h = (a * 374761393 + b * 1103515245) | 0;
   h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
@@ -240,7 +243,7 @@ export function renderFrame(
   state: RenderState,
 ) {
   const {
-    grid, gridVersion, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing, playerOnBorder,
+    grid, gridVersion, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing,
     spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixEntities, dissolveParticles,
     isDissolving, dissolveTimer, level, sparks,
     sparksEnabled, bossEnabled, fuseProgress, animationTime, bucketTilt, bucketPitch,
@@ -357,14 +360,27 @@ export function renderFrame(
 
   // ── Dissolve / Art Reveal: sand-textured pixel art, dissolve particles on top ──
   if (isDissolving || showFullArt) {
-    // Rebuild art canvas if level or field size changed
-    const artDimsKey = `${Math.ceil(dims.fieldWidth)}x${Math.ceil(dims.fieldHeight)}`;
-    if (cachedArtLevel !== level || cachedArtDimsKey !== artDimsKey) {
-      cachedArtLevel   = level;
-      cachedArtDimsKey = artDimsKey;
-      buildArtCanvas(level, dims);
+    const fw = dims.fieldWidth, fh = dims.fieldHeight;
+    const ox = dims.offsetX,    oy = dims.offsetY;
+
+    if (level === 1 && burnyLogoImg.complete && burnyLogoImg.naturalWidth > 0) {
+      // Dark background fill then logo centred/fitted inside the field
+      ctx.fillStyle = '#0d0820';
+      ctx.fillRect(ox, oy, fw, fh);
+      const imgW = burnyLogoImg.naturalWidth, imgH = burnyLogoImg.naturalHeight;
+      const scale = Math.min(fw / imgW, fh / imgH);
+      const dw = imgW * scale, dh = imgH * scale;
+      ctx.drawImage(burnyLogoImg, ox + (fw - dw) / 2, oy + (fh - dh) / 2, dw, dh);
+    } else {
+      // Rebuild art canvas if level or field size changed
+      const artDimsKey = `${Math.ceil(fw)}x${Math.ceil(fh)}`;
+      if (cachedArtLevel !== level || cachedArtDimsKey !== artDimsKey) {
+        cachedArtLevel   = level;
+        cachedArtDimsKey = artDimsKey;
+        buildArtCanvas(level, dims);
+      }
+      ctx.drawImage(artCanvas!, ox, oy);
     }
-    ctx.drawImage(artCanvas!, dims.offsetX, dims.offsetY);
 
     if (isDissolving) {
       const jittering = dissolveTimer < DISSOLVE_JITTER_TIME;
@@ -646,17 +662,23 @@ export function renderFrame(
     ctx.restore();
   });
 
-  // Floating texts
+  // Floating texts — high-contrast white + black stroke, readable over any sand colour
   floatingTexts.forEach(ft => {
     const tx = dims.offsetX + ft.pos.x;
     const ty = dims.offsetY + ft.pos.y;
+    const alpha = ft.life / ft.maxLife;
     ctx.save();
-    ctx.globalAlpha = ft.life / ft.maxLife;
-    ctx.fillStyle = '#F5C86E';
-    ctx.font = 'bold 20px Inter';
+    ctx.globalAlpha = alpha;
+    ctx.font = 'bold 22px Inter, sans-serif';
     ctx.textAlign = 'center';
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    // Thick black stroke for legibility over any background colour
+    ctx.lineWidth = 5;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(ft.text, tx, ty);
+    // Bright white fill
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 0;
     ctx.fillText(ft.text, tx, ty);
     ctx.restore();
   });
@@ -699,19 +721,6 @@ export function renderFrame(
   // Bucket (player)
   const drawX = dims.offsetX + spiderPos.x;
   const drawY = dims.offsetY + spiderPos.y;
-
-  // Safe-zone warm glow ring when on border
-  if (playerOnBorder) {
-    ctx.save();
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = 'rgba(245, 180, 60, 0.9)';
-    ctx.strokeStyle = 'rgba(245, 200, 80, 0.75)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(drawX, drawY, 20, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
 
   ctx.save();
   ctx.translate(drawX, drawY);

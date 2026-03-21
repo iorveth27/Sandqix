@@ -9,28 +9,51 @@ function make(fn: (x: number, y: number) => number): number[] {
   return d;
 }
 
-// Level 1 — Banana
-// Quadratic Bézier spine: P0=(8,1) → ctrl=(15,10) → P2=(3,18)
-// P_y(t) = 1 + 18t − t²  →  t = 9 − √(82 − y)
-// P_x(t) = 8 + 14t − 19t²
-// Colors: 0=bg, 1=yellow body, 2=bright highlight, 3=orange shadow, 4=brown stem
+// Level 1 — Burny Games logo
+// Dome body: ellipse centre (9.5, 19), semi-axes (8.5, 11) — very wide, flat-ish base
+// Three flame tongues rising from the top of the head
+// Colors: 0=black, 1=golden body, 2=bright yellow highlight, 3=dark orange (shadow/tongue/flame base), 4=orange-red (flame tips)
 function level1Art(): number[] {
   return make((x, y) => {
-    if (y < 1 || y > 18) return 0;
-    const disc = 82 - y;
-    if (disc < 0) return 0;
-    const t  = 9 - Math.sqrt(disc);
-    if (t < 0 || t > 1.02) return 0;
-    const tc = Math.max(0, Math.min(1, t));
-    const cx = 8 + 14 * tc - 19 * tc * tc;
-    const hw = 0.7 + 2.3 * Math.sin(tc * Math.PI);
-    const dx = x - cx;
-    if (dx < -hw - 0.5 || dx > hw + 0.5) return 0;
-    if (tc < 0.09 || tc > 0.91) return 4; // brown stem tips
-    const frac = (dx + hw) / (2 * hw); // 0 = left edge, 1 = right edge
-    if (frac < 0.20) return 2; // bright highlight (left/outer edge)
-    if (frac > 0.78) return 3; // orange shadow (right/inner edge)
-    return 1; // yellow body
+    const bx = x - 9.5;
+    const by = y - 19;
+
+    // ── Flame: three tapered tongues, y=0..9 ─────────────────────────────
+    // tongue(cx, tipY, baseHalfWidth): narrow at tip, wide at base (y=9)
+    const tongue = (cx: number, tipY: number, hw0: number): boolean => {
+      if (y < tipY || y > 9) return false;
+      const hw = 0.4 + hw0 * (y - tipY) / (9 - tipY);
+      return Math.abs(x - cx) <= hw;
+    };
+    if (tongue(7,  0, 2.4) ||   // left tongue   (tallest)
+        tongue(10, 1, 2.6) ||   // centre tongue
+        tongue(13, 3, 1.8)) {   // right tongue  (shorter)
+      return y <= 4 ? 4 : 3;   // orange-red tips → dark orange base
+    }
+
+    // ── Body: wide dome ellipse ───────────────────────────────────────────
+    const bodyR = (bx / 8.5) * (bx / 8.5) + (by / 11) * (by / 11);
+    if (bodyR >= 1) return 0;
+
+    // Outline ring
+    if (bodyR > 0.88) return 3;
+
+    // Large black eyes
+    if ((x - 7)  * (x - 7)  + (y - 13) * (y - 13) < 3.2) return 0;  // left
+    if ((x - 12) * (x - 12) + (y - 13) * (y - 13) < 3.2) return 0;  // right
+
+    // Wide open mouth + tongue
+    const mouthR = (bx / 4.5) * (bx / 4.5) + ((y - 16) / 2.5) * ((y - 16) / 2.5);
+    if (mouthR < 1 && y >= 14) {
+      // Tongue: small warm ellipse at bottom of mouth
+      if ((bx / 2.2) * (bx / 2.2) + ((y - 17.5) / 1.8) * ((y - 17.5) / 1.8) < 1) return 3;
+      return 0; // mouth cavity
+    }
+
+    // Body shading: bright dome cap → golden middle → warm shadow bottom
+    if (by < -7.5) return 2;   // bright top highlight
+    if (by > -4)   return 3;   // darker warm shadow at bottom
+    return 1;                  // golden yellow main body
   });
 }
 
@@ -209,7 +232,7 @@ export function getLevelArt(level: number): number[] {
 // Per-level art colors: [background, body, highlight, shadow, accent]
 // Each color is a sandy/warm variant suited to sand-art aesthetics.
 const LEVEL_ART_COLORS: [string, string, string, string, string][] = [
-  ['#c8a07a', '#e8c428', '#f5e070', '#c47810', '#4a1e04'], // 1: banana
+  ['#080808', '#e89018', '#f8d858', '#b84a00', '#b81008'], // 1: burny logo
   ['#7898b0', '#3a7ac4', '#70b0f0', '#1a4880', '#b0d8f8'], // 2: fish
   ['#b88090', '#d43a7c', '#f870b8', '#8c1a50', '#ffc0e0'], // 3: heart
   ['#809870', '#3a8c3a', '#70f070', '#1a5a1a', '#b0f0b0'], // 4: clover

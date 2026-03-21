@@ -72,7 +72,6 @@ export function Overlays({
           >
             +{levelBonus.toLocaleString()} pts
           </p>
-          <p className="text-emerald-400 font-bold text-lg">+1 Life</p>
           <button
             onClick={onReveal}
             className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.4)] mt-2"
