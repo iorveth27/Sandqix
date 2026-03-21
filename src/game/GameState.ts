@@ -5,9 +5,11 @@
 import { CELL, GRID_H, GRID_W } from '../constants';
 import {
   Direction,
+  type DissolveParticle,
   type FloatingText,
   type Particle,
   type Point,
+  type QixEntity,
   type SparkState,
 } from '../types';
 
@@ -44,14 +46,7 @@ export interface GameState {
   bucketPitch: number;
 
   // ── Enemies ────────────────────────────────────────────────────────────
-  qixPos: Point;
-  qixVel: Point;
-  /** Previous QIX position for Verlet integration */
-  qixLastPos: Point;
-  /** Current wander angle for QIX erratic movement */
-  qixAngle: number;
-  /** Trailing positions for the segment-trail visual (most recent first) */
-  qixTrail: Point[];
+  qixEntities: QixEntity[];
   sparks: SparkState[];
 
   // ── Visual effects ─────────────────────────────────────────────────────
@@ -61,13 +56,21 @@ export interface GameState {
   damageFlash: number;
   animationTime: number;
 
-  // ── Scores ─────────────────────────────────────────────────────────────
+  // ── Scores / Level ─────────────────────────────────────────────────────
   capturedPercent: number;
   lives: number;
+  level: number;
+  score: number;
+  levelBonus: number;
+
+  // ── Dissolve ───────────────────────────────────────────────────────────
+  dissolveParticles: DissolveParticle[];
+  dissolveTimer: number;
+
 }
 
 /** Create a fresh GameState with EDGE border initialized */
-export function createGameState(): GameState {
+export function createGameState(level = 1): GameState {
   const grid = new Uint8Array(GRID_W * GRID_H); // all 0 = EMPTY
   // Set perimeter cells to EDGE (4)
   for (let x = 0; x < GRID_W; x++) {
@@ -98,11 +101,7 @@ export function createGameState(): GameState {
     bucketTilt: 0,
     bucketPitch: 1,
 
-    qixPos: { x: 0, y: 0 },
-    qixVel: { x: 0, y: 0 },
-    qixLastPos: { x: 0, y: 0 },
-    qixAngle: Math.PI / 4,
-    qixTrail: [],
+    qixEntities: [],
     sparks: [],
 
     particles: [],
@@ -113,5 +112,11 @@ export function createGameState(): GameState {
 
     capturedPercent: 0,
     lives: 3,
+    level,
+    score: 0,
+    levelBonus: 0,
+
+    dissolveParticles: [],
+    dissolveTimer: 0,
   };
 }

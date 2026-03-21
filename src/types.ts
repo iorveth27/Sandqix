@@ -49,3 +49,22 @@ export interface SparkState {
   targetGX: number;
   targetGY: number;
 }
+
+export interface QixEntity {
+  pos: Point;
+  vel: Point;
+  lastPos: Point;
+  angle: number;
+  trail: Point[];
+}
+
+export interface DissolveParticle {
+  x: number;       // canvas-space x
+  y: number;       // canvas-space y
+  vx: number;
+  vy: number;
+  fallDelay: number; // seconds after jitter ends before this particle starts falling
+  color: string;
+  size: number;    // pixel block side length in canvas pixels
+}
+

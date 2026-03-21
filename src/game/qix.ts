@@ -9,8 +9,8 @@
  *   prevents tunneling through thin player trails.
  */
 
-import { QIX_RADIUS, QIX_WANDER_JITTER, SPIDER_RADIUS } from '../constants';
-import type { Dimensions } from '../types';
+import { LEVEL_SPEED_SCALE, QIX_RADIUS, QIX_WANDER_JITTER, SPIDER_RADIUS } from '../constants';
+import type { Dimensions, QixEntity } from '../types';
 import { getGridPos, isEmptyCell, isTrailCell } from './grid';
 import type { GameState } from './GameState';
 
@@ -29,39 +29,41 @@ function pointToSegDistSq(
   return (px - (ax + t * dx)) ** 2 + (py - (ay + t * dy)) ** 2;
 }
 
-export function tickQix(
+export function tickQixEntity(
+  entity: QixEntity,
   state: GameState,
   dt: number,
   dims: Dimensions,
   onDeath: () => void,
 ): void {
   const captureRatio = state.capturedPercent / 100;
-  const QIX_SPEED = dims.fieldWidth * 0.25 * (1 + captureRatio * 1.5);
+  const speedMult = Math.pow(LEVEL_SPEED_SCALE, state.level - 1);
+  const QIX_SPEED = dims.fieldWidth * 0.25 * (1 + captureRatio * 1.5) * speedMult;
   const dynamicJitter = QIX_WANDER_JITTER * (1 + captureRatio * 3);
-  state.qixAngle += (Math.random() * 2 - 1) * dynamicJitter;
+  entity.angle += (Math.random() * 2 - 1) * dynamicJitter;
 
   // ── Center-bias: gentle pull toward void center ───────────────────────────
   const cx = dims.fieldWidth / 2;
   const cy = dims.fieldHeight / 2;
-  const toCX = cx - state.qixPos.x;
-  const toCY = cy - state.qixPos.y;
+  const toCX = cx - entity.pos.x;
+  const toCY = cy - entity.pos.y;
   const distToCenter = Math.hypot(toCX, toCY);
   const fieldDiag = Math.hypot(dims.fieldWidth, dims.fieldHeight) / 2;
   if (distToCenter > 0) {
     const centerAngle = Math.atan2(toCY, toCX);
     const avoidStrength = 0.04 * (distToCenter / fieldDiag);
-    const angleDiff = Math.atan2(Math.sin(centerAngle - state.qixAngle), Math.cos(centerAngle - state.qixAngle));
-    state.qixAngle += angleDiff * avoidStrength;
+    const angleDiff = Math.atan2(Math.sin(centerAngle - entity.angle), Math.cos(centerAngle - entity.angle));
+    entity.angle += angleDiff * avoidStrength;
   }
 
   // ── Verlet: derive velocity from position history ────────────────────────
-  let velX = state.qixPos.x - state.qixLastPos.x;
-  let velY = state.qixPos.y - state.qixLastPos.y;
+  let velX = entity.pos.x - entity.lastPos.x;
+  let velY = entity.pos.y - entity.lastPos.y;
 
   // Blend wander direction into velocity
   const wanderBlend = 0.15;
-  velX += Math.cos(state.qixAngle) * wanderBlend;
-  velY += Math.sin(state.qixAngle) * wanderBlend;
+  velX += Math.cos(entity.angle) * wanderBlend;
+  velY += Math.sin(entity.angle) * wanderBlend;
 
   // Normalize to constant speed
   const spd = Math.hypot(velX, velY);
@@ -71,25 +73,25 @@ export function tickQix(
     velY = (velY / spd) * step;
   }
 
-  let nextX = state.qixPos.x + velX;
-  let nextY = state.qixPos.y + velY;
+  let nextX = entity.pos.x + velX;
+  let nextY = entity.pos.y + velY;
 
   // ── Bounce off field edges and non-EMPTY territory ───────────────────────
-  const gpX = getGridPos({ x: nextX, y: state.qixPos.y }, dims);
-  const gpY = getGridPos({ x: state.qixPos.x, y: nextY }, dims);
+  const gpX = getGridPos({ x: nextX, y: entity.pos.y }, dims);
+  const gpY = getGridPos({ x: entity.pos.x, y: nextY }, dims);
 
   const hitX = nextX < 0 || nextX > dims.fieldWidth  || !isEmptyCell(state.grid, gpX.x, gpX.y);
   const hitY = nextY < 0 || nextY > dims.fieldHeight || !isEmptyCell(state.grid, gpY.x, gpY.y);
 
   if (hitX) {
     velX = -velX;
-    nextX = state.qixPos.x + velX;
-    state.qixAngle = Math.PI - state.qixAngle;
+    nextX = entity.pos.x + velX;
+    entity.angle = Math.PI - entity.angle;
   }
   if (hitY) {
     velY = -velY;
-    nextY = state.qixPos.y + velY;
-    state.qixAngle = -state.qixAngle;
+    nextY = entity.pos.y + velY;
+    entity.angle = -entity.angle;
   }
 
   // Corner correction: if still stuck, reverse completely
@@ -97,9 +99,9 @@ export function tickQix(
   if (!isEmptyCell(state.grid, finalGP.x, finalGP.y)) {
     velX = -velX;
     velY = -velY;
-    nextX = state.qixPos.x + velX;
-    nextY = state.qixPos.y + velY;
-    state.qixAngle += Math.PI;
+    nextX = entity.pos.x + velX;
+    nextY = entity.pos.y + velY;
+    entity.angle += Math.PI;
   }
 
   // Clamp to field bounds
@@ -107,11 +109,11 @@ export function tickQix(
   nextY = Math.max(0, Math.min(dims.fieldHeight, nextY));
 
   // ── Update Verlet history + segment trail ────────────────────────────────
-  state.qixLastPos = { ...state.qixPos };
-  state.qixTrail.unshift({ ...state.qixPos });
-  if (state.qixTrail.length > QIX_TRAIL_LEN) state.qixTrail.length = QIX_TRAIL_LEN;
-  state.qixPos = { x: nextX, y: nextY };
-  state.qixVel = { x: velX, y: velY };
+  entity.lastPos = { ...entity.pos };
+  entity.trail.unshift({ ...entity.pos });
+  if (entity.trail.length > QIX_TRAIL_LEN) entity.trail.length = QIX_TRAIL_LEN;
+  entity.pos = { x: nextX, y: nextY };
+  entity.vel = { x: velX, y: velY };
 
   // ── Collision detection ──────────────────────────────────────────────────
   if (state.playerDrawing) {

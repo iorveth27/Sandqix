@@ -4,26 +4,59 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ASPECT_RATIO, CELL, FIELD_MARGIN, FUSE_MAX_TIME, GRID_H, GRID_W, UI_HEIGHT_RESERVE, WIN_PERCENT } from './constants';
-import { Direction, type Dimensions } from './types';
+import {
+  ASPECT_RATIO, BONUS_PER_PERCENT, CELL, DISSOLVE_GRAVITY, DISSOLVE_JITTER_TIME,
+  FIELD_MARGIN, FUSE_MAX_TIME, GRID_H, GRID_W, LEVEL_PALETTES,
+  UI_HEIGHT_RESERVE, WIN_PERCENT,
+} from './constants';
+import { Direction, type Dimensions, type DissolveParticle, type QixEntity } from './types';
 import { playCaptureSound } from './audio';
 import { renderFrame } from './renderer';
 import { HUD } from './components/HUD';
 import { Joystick } from './components/Joystick';
 import { Overlays } from './components/Overlays';
 import { createGameState } from './game/GameState';
+import type { GameState } from './game/GameState';
 import { getGridPos, gridToWorld, isWalkable } from './game/grid';
 import { fillCapturedArea } from './game/territory';
 import { tickPlayer } from './game/player';
-import { tickQix } from './game/qix';
+import { tickQixEntity } from './game/qix';
 import { tickSparks } from './game/sparks';
 import { tickParticles } from './game/particles';
+
+type GameStage = 'PLAYING' | 'LEVEL_CLEAR' | 'DISSOLVE' | 'INTERSTITIAL' | 'GAMEOVER';
+
+function createDissolveParticles(state: GameState, dims: Dimensions): DissolveParticle[] {
+  const particles: DissolveParticle[] = [];
+  const cellW = dims.fieldWidth / (GRID_W - 1);
+  const cellH = dims.fieldHeight / (GRID_H - 1);
+  const palette = LEVEL_PALETTES[(state.level - 1) % LEVEL_PALETTES.length];
+  for (let gy = 0; gy < GRID_H; gy++) {
+    for (let gx = 0; gx < GRID_W; gx++) {
+      const cell = state.grid[gy * GRID_W + gx];
+      if (cell === CELL.FILLED || cell === CELL.LINE) {
+        const r = Math.random();
+        const color = r < 0.12 ? palette.bright : r > 0.88 ? palette.dark : palette.base;
+        particles.push({
+          x: dims.offsetX + gx * cellW,
+          y: dims.offsetY + gy * cellH,
+          vx: (Math.random() - 0.5) * 30,
+          vy: -10 + Math.random() * 20,
+          fallDelay: Math.random() * 0.3,
+          color,
+          size: Math.ceil(Math.max(cellW, cellH)) + 1,
+        });
+      }
+    }
+  }
+  return particles;
+}
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef    = useRef<HTMLCanvasElement>(null);
 
-  const [gameState,       setGameState]       = useState<'PLAYING' | 'GAMEOVER' | 'WIN'>('PLAYING');
+  const [gameStage,       setGameStage]       = useState<GameStage>('PLAYING');
   const [isPaused,        setIsPaused]        = useState(false);
   const [sparksEnabled,   setSparksEnabled]   = useState(() => localStorage.getItem('sparksEnabled') !== 'false');
   const [bossEnabled,     setBossEnabled]     = useState(() => localStorage.getItem('bossEnabled') !== 'false');
@@ -31,41 +64,69 @@ export default function App() {
   const [dimensions,      setDimensions]      = useState<Dimensions>({ width: 0, height: 0, fieldWidth: 0, fieldHeight: 0, offsetX: 0, offsetY: 0 });
   const [capturedPercent, setCapturedPercent] = useState(0);
   const [lives,           setLives]           = useState(3);
+  const [level,           setLevel]           = useState(1);
+  const [score,           setScore]           = useState(0);
+  const [levelBonus,      setLevelBonus]      = useState(0);
+  const [loopKey,         setLoopKey]         = useState(0);
 
   const gs = useRef(createGameState());
 
-  const lastTime         = useRef<number>(0);
-  const requestRef       = useRef<number>();
-  const gameStateRef     = useRef(gameState);
-  const isPausedRef      = useRef(false);
-  const sparksEnabledRef = useRef(true);
-  const bossEnabledRef   = useRef(true);
-  const fuseEnabledRef   = useRef(true);
-  const hasStarted       = useRef(false);
+  const lastTime            = useRef<number>(0);
+  const requestRef          = useRef<number>();
+  const gameStageRef        = useRef<GameStage>('PLAYING');
+  const isPausedRef         = useRef(false);
+  const sparksEnabledRef    = useRef(true);
+  const bossEnabledRef      = useRef(true);
+  const fuseEnabledRef      = useRef(true);
+  const hasStarted = useRef(false);
 
-  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+  const setStage = (s: GameStage) => {
+    gameStageRef.current = s;
+    setGameStage(s);
+  };
+
+  const handleReveal = () => {
+    const state = gs.current;
+    state.dissolveParticles = createDissolveParticles(state, dimensions);
+    state.dissolveTimer = 0;
+    setStage('DISSOLVE');
+  };
+
   useEffect(() => { isPausedRef.current  = isPaused;  }, [isPaused]);
   useEffect(() => { sparksEnabledRef.current = sparksEnabled; localStorage.setItem('sparksEnabled', String(sparksEnabled)); }, [sparksEnabled]);
   useEffect(() => { bossEnabledRef.current   = bossEnabled;   localStorage.setItem('bossEnabled',   String(bossEnabled));   }, [bossEnabled]);
   useEffect(() => { fuseEnabledRef.current   = fuseEnabled;   localStorage.setItem('fuseEnabled',   String(fuseEnabled));   }, [fuseEnabled]);
 
-  const startGame = (dims: Dimensions) => {
-    const state = createGameState();
+  const makeQix = (x: number, y: number): QixEntity => {
+    const angle = Math.PI / 4 + Math.floor(Math.random() * 4) * (Math.PI / 2);
+    const speed = 1; // placeholder — actual speed computed from dims in tickQixEntity
+    const dt0 = 1 / 60;
+    const pos = { x, y };
+    return {
+      pos,
+      vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
+      lastPos: { x: x - Math.cos(angle) * speed * dt0, y: y - Math.sin(angle) * speed * dt0 },
+      angle,
+      trail: [],
+    };
+  };
+
+  const startGame = (dims: Dimensions, opts?: { level?: number; lives?: number; score?: number }) => {
+    const lvl = opts?.level ?? 1;
+    const state = createGameState(lvl);
 
     // Player starts at the middle of the top EDGE row so moving DOWN enters EMPTY immediately
     state.spiderPos = { x: dims.fieldWidth / 2, y: 0 };
 
-    // QIX starts at center with random Verlet-seeded velocity
-    const angle = Math.PI / 4 + Math.floor(Math.random() * 4) * (Math.PI / 2);
-    const speed = dims.fieldWidth * 0.25;
-    const dt0   = 1 / 60;
-    state.qixPos     = { x: dims.fieldWidth / 2, y: dims.fieldHeight / 2 };
-    state.qixLastPos = {
-      x: state.qixPos.x - Math.cos(angle) * speed * dt0,
-      y: state.qixPos.y - Math.sin(angle) * speed * dt0,
-    };
-    state.qixVel   = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
-    state.qixAngle = angle;
+    // QIX entities based on level
+    state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
+    if (lvl >= 3) {
+      state.qixEntities.push(makeQix(dims.fieldWidth * 2 / 3, dims.fieldHeight / 3));
+    }
+
+    state.lives = opts?.lives ?? 3;
+    state.score = opts?.score ?? 0;
+    state.level = lvl;
 
     // Sparks start on the bottom EDGE row
     const spark1gx = Math.round(0.25 * (GRID_W - 1));
@@ -78,9 +139,11 @@ export default function App() {
     ];
 
     gs.current = state;
-    setGameState('PLAYING');
+    setLevel(lvl);
+    setScore(state.score);
     setCapturedPercent(0);
-    setLives(3);
+    setLives(state.lives);
+    setStage('PLAYING');
   };
 
   // Auto-start once dimensions are ready
@@ -128,7 +191,7 @@ export default function App() {
 
   // Game loop
   useEffect(() => {
-    if (gameState !== 'PLAYING') return;
+    if (gameStageRef.current === 'GAMEOVER') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -156,7 +219,7 @@ export default function App() {
       }
 
       if (state.lives <= 0) {
-        setGameState('GAMEOVER');
+        setStage('GAMEOVER');
         return;
       }
 
@@ -217,7 +280,9 @@ export default function App() {
       const dt = Math.min((time - lastTime.current) / 1000, 0.05);
       lastTime.current = time;
 
-      if (gameStateRef.current === 'PLAYING' && !isPausedRef.current) {
+      const stage = gameStageRef.current;
+
+      if (stage === 'PLAYING' && !isPausedRef.current) {
         const state = gs.current;
         state.animationTime += dt * 1000;
 
@@ -240,14 +305,51 @@ export default function App() {
           const captured = fillCapturedArea(state, dimensions);
           if (captured > 0) {
             playCaptureSound();
+            state.score += captured * 100;
+            setScore(state.score);
             setCapturedPercent(state.capturedPercent);
           }
         }, fuseEnabledRef.current);
 
-        if (bossEnabledRef.current)   tickQix(state, dt, dimensions, handleDeath);
+        if (bossEnabledRef.current) {
+          for (const entity of state.qixEntities) {
+            tickQixEntity(entity, state, dt, dimensions, handleDeath);
+          }
+        }
         if (sparksEnabledRef.current) tickSparks(state, dt, dimensions, handleDeath);
 
-        if (state.capturedPercent >= WIN_PERCENT) setGameState('WIN');
+        if (state.capturedPercent >= WIN_PERCENT) {
+          const overCapture = Math.max(0, state.capturedPercent - WIN_PERCENT);
+          const bonus = overCapture * BONUS_PER_PERCENT;
+          state.levelBonus = bonus;
+          state.score += bonus;
+          state.lives = Math.min(state.lives + 1, 5);
+          setLevelBonus(bonus);
+          setLives(state.lives);
+          setScore(state.score);
+          setStage('LEVEL_CLEAR');
+        }
+      } else if (stage === 'LEVEL_CLEAR') {
+        gs.current.animationTime += dt * 1000;
+      } else if (stage === 'DISSOLVE') {
+        const state = gs.current;
+        state.animationTime += dt * 1000;
+        state.dissolveTimer += dt;
+        const fallElapsed = state.dissolveTimer - DISSOLVE_JITTER_TIME;
+        if (fallElapsed > 0) {
+          for (const p of state.dissolveParticles) {
+            if (fallElapsed > p.fallDelay) {
+              p.vy += DISSOLVE_GRAVITY * dt;
+              p.vx *= 0.995;
+              p.x += p.vx * dt;
+              p.y += p.vy * dt;
+            }
+          }
+        }
+        // Transition to INTERSTITIAL once all particles are off-screen
+        if (state.dissolveTimer > DISSOLVE_JITTER_TIME + 2.8) {
+          setStage('INTERSTITIAL');
+        }
       }
 
       const state = gs.current;
@@ -265,8 +367,11 @@ export default function App() {
         floatingTexts:       state.floatingTexts,
         captureFlash:        state.captureFlash,
         damageFlash:         state.damageFlash,
-        qixPos:              state.qixPos,
-        qixTrail:            state.qixTrail,
+        qixEntities:         state.qixEntities.map(q => ({ pos: q.pos, trail: q.trail })),
+        dissolveParticles:   state.dissolveParticles,
+        isDissolving:        gameStageRef.current === 'DISSOLVE',
+        dissolveTimer:       state.dissolveTimer,
+        level:               state.level,
         sparks:              state.sparks.map(s => ({ pos: s.pos, migrating: s.migrating })),
         sparksEnabled:       sparksEnabledRef.current,
         bossEnabled:         bossEnabledRef.current,
@@ -276,7 +381,7 @@ export default function App() {
         bucketTilt:          state.bucketTilt,
         bucketPitch:         state.bucketPitch,
         captureWaveProgress: state.captureWaveProgress,
-        isMoving:            state.spiderDir !== Direction.NONE,
+        showFullArt:         stage === 'DISSOLVE' || stage === 'INTERSTITIAL',
       });
 
       requestRef.current = requestAnimationFrame(update);
@@ -285,12 +390,12 @@ export default function App() {
     lastTime.current   = performance.now();
     requestRef.current = requestAnimationFrame(update);
     return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
-  }, [dimensions]);
+  }, [dimensions, loopKey]);
 
   // Keyboard input
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (gameStateRef.current !== 'PLAYING') return;
+      if (gameStageRef.current !== 'PLAYING') return;
       let newDir = Direction.NONE;
       switch (e.key) {
         case 'ArrowUp':    case 'w': case 'W': newDir = Direction.UP;    break;
@@ -342,14 +447,15 @@ export default function App() {
   return (
     <div className="fixed inset-0 flex flex-col overflow-hidden touch-none select-none font-sans" style={{ background: '#0d0820' }}>
       <HUD
-        isVisible={gameState === 'PLAYING'}
+        isVisible={gameStage === 'PLAYING' || gameStage === 'LEVEL_CLEAR'}
         capturedPercent={capturedPercent}
         lives={lives}
+        level={level}
+        score={score}
         onPause={() => setIsPaused(true)}
       />
 
       <div ref={containerRef} className="flex-1 relative flex items-center justify-center overflow-hidden">
-
 
         <canvas
           ref={canvasRef}
@@ -359,20 +465,32 @@ export default function App() {
         />
 
         <Overlays
-          gameState={gameState}
+          gameStage={gameStage}
           isPaused={isPaused}
           capturedPercent={capturedPercent}
+          level={level}
+          score={score}
+          levelBonus={levelBonus}
           sparksEnabled={sparksEnabled}
           bossEnabled={bossEnabled}
           fuseEnabled={fuseEnabled}
           onToggleSparks={() => setSparksEnabled(v => !v)}
           onToggleBoss={() => setBossEnabled(v => !v)}
           onToggleFuse={() => setFuseEnabled(v => !v)}
-          onRestart={() => { setIsPaused(false); startGame(dimensions); }}
+          onReveal={handleReveal}
+          onRestart={() => {
+            setIsPaused(false);
+            startGame(dimensions);
+            setLoopKey(k => k + 1);
+          }}
           onResume={() => setIsPaused(false)}
+          onNextLevel={() => {
+            const state = gs.current;
+            startGame(dimensions, { level: state.level + 1, lives: state.lives, score: state.score });
+          }}
         />
 
-        {gameState === 'PLAYING' && <Joystick onMove={handleJoystickMove} />}
+        {gameStage === 'PLAYING' && <Joystick onMove={handleJoystickMove} />}
       </div>
     </div>
   );

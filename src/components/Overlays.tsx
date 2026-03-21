@@ -1,25 +1,36 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bug, Play, RotateCcw } from 'lucide-react';
+import { Play, RotateCcw, ArrowRight, Sparkles } from 'lucide-react';
+
+type GameStage = 'PLAYING' | 'LEVEL_CLEAR' | 'DISSOLVE' | 'INTERSTITIAL' | 'GAMEOVER';
 
 interface OverlaysProps {
-  gameState: 'PLAYING' | 'GAMEOVER' | 'WIN';
+  gameStage: GameStage;
   isPaused: boolean;
   capturedPercent: number;
+  level: number;
+  score: number;
+  levelBonus: number;
   sparksEnabled: boolean;
   bossEnabled: boolean;
   fuseEnabled: boolean;
   onToggleSparks: () => void;
   onToggleBoss: () => void;
   onToggleFuse: () => void;
+  onReveal: () => void;
   onRestart: () => void;
   onResume: () => void;
+  onNextLevel: () => void;
 }
 
-export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, bossEnabled, fuseEnabled, onToggleSparks, onToggleBoss, onToggleFuse, onRestart, onResume }: OverlaysProps) {
+export function Overlays({
+  gameStage, isPaused, capturedPercent, level, score, levelBonus,
+  sparksEnabled, bossEnabled, fuseEnabled,
+  onToggleSparks, onToggleBoss, onToggleFuse, onReveal, onRestart, onResume, onNextLevel,
+}: OverlaysProps) {
   return (
     <AnimatePresence>
-      {gameState === 'GAMEOVER' && (
+      {gameStage === 'GAMEOVER' && (
         <motion.div
           key="gameover"
           initial={{ opacity: 0, scale: 0.9 }}
@@ -27,7 +38,14 @@ export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, 
           className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] text-white"
         >
           <h2 className="text-4xl font-sans font-bold tracking-tight">Game Over</h2>
-          <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">You captured {capturedPercent}% of the territory.</p>
+          <div className="flex flex-col items-center gap-1">
+            <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">
+              Level {level} — {capturedPercent}% captured
+            </p>
+            <p className="text-amber-400 text-center text-lg font-bold tabular-nums">
+              {score.toLocaleString()} pts
+            </p>
+          </div>
           <button
             onClick={onRestart}
             className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
@@ -38,24 +56,57 @@ export function Overlays({ gameState, isPaused, capturedPercent, sparksEnabled, 
         </motion.div>
       )}
 
-      {gameState === 'WIN' && (
+      {gameStage === 'LEVEL_CLEAR' && (
         <motion.div
-          key="win"
+          key="levelclear"
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-amber-500/30 flex flex-col items-center gap-4 shadow-[0_0_40px_rgba(251,191,36,0.3)] text-white"
+        >
+          <h2 className="text-4xl font-sans font-bold tracking-tight text-amber-400">
+            Level {level} Clear!
+          </h2>
+          <p
+            className="text-2xl font-black tabular-nums"
+            style={{ color: '#fbbf24', textShadow: '0 0 20px rgba(251,191,36,0.6)' }}
+          >
+            +{levelBonus.toLocaleString()} pts
+          </p>
+          <p className="text-emerald-400 font-bold text-lg">+1 Life</p>
+          <button
+            onClick={onReveal}
+            className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.4)] mt-2"
+          >
+            <Sparkles className="mr-2 w-5 h-5" />
+            Reveal!
+          </button>
+        </motion.div>
+      )}
+
+      {gameStage === 'INTERSTITIAL' && (
+        <motion.div
+          key="interstitial"
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] text-white"
+          className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-amber-500/30 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(251,191,36,0.2)] text-white"
         >
-          <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.5)]">
-            <Bug className="w-10 h-10 text-black" />
+          <div className="flex flex-col items-center gap-2">
+            <h2 className="text-5xl font-sans font-black tracking-tight text-amber-400">
+              Level {level + 1}
+            </h2>
+            <p className="text-white/60 text-sm font-medium uppercase tracking-widest">
+              Get ready...
+            </p>
           </div>
-          <h2 className="text-4xl font-sans font-bold tracking-tight">Victory!</h2>
-          <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">You captured the territory.</p>
+          <p className="text-white/50 text-base tabular-nums">
+            Score: {score.toLocaleString()}
+          </p>
           <button
-            onClick={onRestart}
-            className="flex items-center justify-center w-full py-4 bg-emerald-500 text-black rounded-full font-bold text-lg transition-all hover:bg-emerald-400 active:scale-95 shadow-[0_0_20px_rgba(16,185,129,0.3)] mt-2"
+            onClick={onNextLevel}
+            className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
           >
-            <RotateCcw className="mr-2 w-5 h-5" />
-            Play Again
+            <ArrowRight className="mr-2 w-5 h-5" />
+            Next Level
           </button>
         </motion.div>
       )}

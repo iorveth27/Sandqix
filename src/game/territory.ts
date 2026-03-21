@@ -180,27 +180,29 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     }
   }
 
-  // ── 8. Handle QIX trapped in non-EMPTY territory ─────────────────────────
-  const qixGP = getGridPos(state.qixPos, dims);
-  if (!isEmptyCell(grid, qixGP.x, qixGP.y)) {
-    const qbfs = new Uint8Array(GRID_W * GRID_H);
-    const qqueue: [number, number][] = [[qixGP.x, qixGP.y]];
-    qbfs[qixGP.y * GRID_W + qixGP.x] = 1;
-    let rescued = false;
-    while (qqueue.length > 0 && !rescued) {
-      const [qx, qy] = qqueue.shift()!;
-      for (const [ddx, ddy] of DIRS4) {
-        const nx = qx + ddx, ny = qy + ddy;
-        if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-        if (qbfs[ny * GRID_W + nx]) continue;
-        qbfs[ny * GRID_W + nx] = 1;
-        if (isEmptyCell(grid, nx, ny)) {
-          state.qixPos     = gridToWorld(nx, ny, dims);
-          state.qixLastPos = { ...state.qixPos };
-          rescued = true;
-          break;
+  // ── 8. Handle QIX entities trapped in non-EMPTY territory ────────────────
+  for (const entity of state.qixEntities) {
+    const qixGP = getGridPos(entity.pos, dims);
+    if (!isEmptyCell(grid, qixGP.x, qixGP.y)) {
+      const qbfs = new Uint8Array(GRID_W * GRID_H);
+      const qqueue: [number, number][] = [[qixGP.x, qixGP.y]];
+      qbfs[qixGP.y * GRID_W + qixGP.x] = 1;
+      let rescued = false;
+      while (qqueue.length > 0 && !rescued) {
+        const [qx, qy] = qqueue.shift()!;
+        for (const [ddx, ddy] of DIRS4) {
+          const nx = qx + ddx, ny = qy + ddy;
+          if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
+          if (qbfs[ny * GRID_W + nx]) continue;
+          qbfs[ny * GRID_W + nx] = 1;
+          if (isEmptyCell(grid, nx, ny)) {
+            entity.pos     = gridToWorld(nx, ny, dims);
+            entity.lastPos = { ...entity.pos };
+            rescued = true;
+            break;
+          }
+          qqueue.push([nx, ny]);
         }
-        qqueue.push([nx, ny]);
       }
     }
   }

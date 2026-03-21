@@ -1,5 +1,6 @@
-import { CELL, GRID_W, GRID_H } from './constants';
-import type { Dimensions, Particle, FloatingText, Point } from './types';
+import { CELL, GRID_W, GRID_H, DISSOLVE_JITTER_TIME, LEVEL_PALETTES } from './constants';
+import type { Dimensions, DissolveParticle, Particle, FloatingText, Point } from './types';
+import { ART_W, ART_H, getLevelArt, getLevelArtColors } from './game/pixelArt';
 
 export interface RenderState {
   grid: Uint8Array;
@@ -15,8 +16,11 @@ export interface RenderState {
   floatingTexts: FloatingText[];
   captureFlash: number;
   damageFlash: number;
-  qixPos: Point;
-  qixTrail: Point[];
+  qixEntities: { pos: Point; trail: Point[] }[];
+  dissolveParticles: DissolveParticle[];
+  isDissolving: boolean;
+  dissolveTimer: number;
+  level: number;
   sparks: { pos: Point; migrating: boolean }[];
   sparksEnabled: boolean;
   bossEnabled: boolean;
@@ -26,7 +30,7 @@ export interface RenderState {
   bucketTilt: number;
   bucketPitch: number;
   captureWaveProgress: number;
-  isMoving: boolean;
+  showFullArt: boolean;
 }
 
 const BUCKET_SVG = `<svg width="84" height="84" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -111,29 +115,104 @@ function hashFloat(a: number, b: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 0xffffffff;
 }
 
-// ── Golden sand tile pattern (32×32) ─────────────────────────────────────
-const patCanvas = document.createElement('canvas');
-patCanvas.width = 32; patCanvas.height = 32;
-const patCtx = patCanvas.getContext('2d')!;
-patCtx.fillStyle = '#d4924a'; // warm gold base
-patCtx.fillRect(0, 0, 32, 32);
-for (let gy = 0; gy < 32; gy++) {
-  for (let gx = 0; gx < 32; gx++) {
-    const v = hashFloat(gx * 31 + 7, gy * 17 + 3);
-    const v2 = hashFloat(gx * 13 + 5, gy * 29 + 11);
-    if (v < 0.12) {
-      patCtx.fillStyle = '#f5d47a'; // bright gold sparkle
-      patCtx.fillRect(gx, gy, 1, 1);
-    } else if (v > 0.88) {
-      patCtx.fillStyle = '#8b5a20'; // dark amber grain
-      patCtx.fillRect(gx, gy, 1, 1);
-    } else if (v2 > 0.92) {
-      patCtx.fillStyle = '#fde68a'; // white-gold glint
-      patCtx.fillRect(gx, gy, 1, 1);
+// ── Golden sand tile pattern (32×32) — lazily rebuilt per palette ──────────
+let patCanvas: HTMLCanvasElement | null = null;
+let sandPattern: CanvasPattern | null = null;
+let cachedPaletteIndex = -1;
+
+function buildSandPattern(ctx: CanvasRenderingContext2D, palette: { base: string; bright: string; dark: string; glint: string }): CanvasPattern {
+  if (!patCanvas) {
+    patCanvas = document.createElement('canvas');
+    patCanvas.width = 32;
+    patCanvas.height = 32;
+  }
+  const patCtx = patCanvas.getContext('2d')!;
+  patCtx.fillStyle = palette.base;
+  patCtx.fillRect(0, 0, 32, 32);
+  for (let gy = 0; gy < 32; gy++) {
+    for (let gx = 0; gx < 32; gx++) {
+      const v = hashFloat(gx * 31 + 7, gy * 17 + 3);
+      const v2 = hashFloat(gx * 13 + 5, gy * 29 + 11);
+      if (v < 0.12) {
+        patCtx.fillStyle = palette.bright;
+        patCtx.fillRect(gx, gy, 1, 1);
+      } else if (v > 0.88) {
+        patCtx.fillStyle = palette.dark;
+        patCtx.fillRect(gx, gy, 1, 1);
+      } else if (v2 > 0.92) {
+        patCtx.fillStyle = palette.glint;
+        patCtx.fillRect(gx, gy, 1, 1);
+      }
     }
   }
+  return ctx.createPattern(patCanvas, 'repeat')!;
 }
-let sandPattern: CanvasPattern | null = null;
+
+// ── Per-level art canvas with sand-grain texture (built once, blitted each frame) ──
+let artCanvas: HTMLCanvasElement | null = null;
+let cachedArtLevel = -1;
+let cachedArtDimsKey = '';
+
+function hexToRgb(hex: string): [number, number, number] {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+function buildArtCanvas(level: number, dims: Dimensions): void {
+  const w = Math.ceil(dims.fieldWidth);
+  const h = Math.ceil(dims.fieldHeight);
+  if (!artCanvas) artCanvas = document.createElement('canvas');
+  artCanvas.width  = w;
+  artCanvas.height = h;
+  const ac = artCanvas.getContext('2d')!;
+
+  const colors    = getLevelArtColors(level);
+  const artPixels = getLevelArt(level);
+  const rgbs      = colors.map(hexToRgb) as [number, number, number][];
+  const cellW     = dims.fieldWidth  / ART_W;
+  const cellH     = dims.fieldHeight / ART_H;
+
+  const imageData = ac.createImageData(w, h);
+  const data      = imageData.data;
+
+  for (let ay = 0; ay < ART_H; ay++) {
+    for (let ax = 0; ax < ART_W; ax++) {
+      const ci         = artPixels[ay * ART_W + ax];
+      const [br, bg, bb] = rgbs[ci];
+      const x0 = Math.round(ax * cellW);
+      const y0 = Math.round(ay * cellH);
+      const x1 = Math.min(Math.round((ax + 1) * cellW), w);
+      const y1 = Math.min(Math.round((ay + 1) * cellH), h);
+
+      for (let py = y0; py < y1; py++) {
+        for (let px = x0; px < x1; px++) {
+          const v   = hashFloat(px + 313, py + 719);
+          let r = br, g = bg, b = bb;
+          if (v < 0.09) {
+            // bright sand grain
+            r = Math.min(255, r + 48); g = Math.min(255, g + 38); b = Math.min(255, b + 28);
+          } else if (v > 0.91) {
+            // dark sand grain
+            r = Math.max(0, r - 38); g = Math.max(0, g - 38); b = Math.max(0, b - 32);
+          } else if (v > 0.84) {
+            // medium-dark grain
+            r = Math.max(0, r - 18); g = Math.max(0, g - 18); b = Math.max(0, b - 14);
+          }
+          const idx = (py * w + px) * 4;
+          data[idx]     = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
+          data[idx + 3] = 255;
+        }
+      }
+    }
+  }
+
+  ac.putImageData(imageData, 0, 0);
+}
 
 // ── Offscreen territory cache (FILLED + borders + LINE cells) ─────────────
 // Rebuilt only when gridVersion or canvas dimensions change — O(1) per frame otherwise.
@@ -162,9 +241,10 @@ export function renderFrame(
 ) {
   const {
     grid, gridVersion, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing, playerOnBorder,
-    spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixPos, qixTrail, sparks,
-    sparksEnabled, bossEnabled, fuseProgress, animationTime, bucketAngle, bucketTilt, bucketPitch,
-    captureWaveProgress, isMoving
+    spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixEntities, dissolveParticles,
+    isDissolving, dissolveTimer, level, sparks,
+    sparksEnabled, bossEnabled, fuseProgress, animationTime, bucketTilt, bucketPitch,
+    captureWaveProgress, showFullArt,
   } = state;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -264,7 +344,46 @@ export function renderFrame(
 
   const cellW = dims.fieldWidth / (GRID_W - 1);
   const cellH = dims.fieldHeight / (GRID_H - 1);
-  if (!sandPattern) sandPattern = ctx.createPattern(patCanvas, 'repeat')!;
+
+  // Rebuild sand pattern if palette changed
+  const paletteIndex = (level - 1) % LEVEL_PALETTES.length;
+  if (paletteIndex !== cachedPaletteIndex) {
+    cachedPaletteIndex = paletteIndex;
+    sandPattern = buildSandPattern(ctx, LEVEL_PALETTES[paletteIndex]);
+    // Also invalidate the territory cache so it's rebuilt with the new pattern
+    cachedGridVersion = -1;
+  }
+  if (!sandPattern) sandPattern = buildSandPattern(ctx, LEVEL_PALETTES[paletteIndex]);
+
+  // ── Dissolve / Art Reveal: sand-textured pixel art, dissolve particles on top ──
+  if (isDissolving || showFullArt) {
+    // Rebuild art canvas if level or field size changed
+    const artDimsKey = `${Math.ceil(dims.fieldWidth)}x${Math.ceil(dims.fieldHeight)}`;
+    if (cachedArtLevel !== level || cachedArtDimsKey !== artDimsKey) {
+      cachedArtLevel   = level;
+      cachedArtDimsKey = artDimsKey;
+      buildArtCanvas(level, dims);
+    }
+    ctx.drawImage(artCanvas!, dims.offsetX, dims.offsetY);
+
+    if (isDissolving) {
+      const jittering = dissolveTimer < DISSOLVE_JITTER_TIME;
+      const sorted = [...dissolveParticles].sort((a, b) => a.color < b.color ? -1 : a.color > b.color ? 1 : 0);
+      let currentColor = '';
+      for (const p of sorted) {
+        if (p.color !== currentColor) {
+          ctx.fillStyle = p.color;
+          currentColor = p.color;
+        }
+        const rx = jittering ? p.x + (Math.random() - 0.5) * 8 : p.x;
+        const ry = jittering ? p.y + (Math.random() - 0.5) * 8 : p.y;
+        ctx.fillRect(rx, ry, p.size, p.size);
+      }
+    }
+
+    if (damageFlash > 0) ctx.restore();
+    return;
+  }
 
   // ── Territory cache: FILLED + borders + LINE cells ────────────────────────
   // Only rebuilt when gridVersion or canvas dimensions change.
@@ -430,64 +549,74 @@ export function renderFrame(
     }
   }
 
-  // Qix
+  // QIX entities
   if (bossEnabled) {
     const t = animationTime / 1000;
-    const qixColors = ['#ff00ff', '#ff4400', '#ffff00', '#00ffff', '#ff00aa', '#aa00ff'];
 
-    // Derive velocity direction from trail for squash/stretch
-    const velX = qixTrail.length > 0 ? qixPos.x - qixTrail[0].x : 0;
-    const velY = qixTrail.length > 0 ? qixPos.y - qixTrail[0].y : 0;
-    const velAngle = Math.atan2(velY, velX);
-    const velMag = Math.hypot(velX, velY);
-    // stretchAmt 0–1: how much to elongate along velocity axis
-    const stretchAmt = Math.min(velMag / 3, 1);
+    // Color palettes per entity
+    const entityColorSets = [
+      ['#ff00ff', '#ff4400', '#ffff00', '#00ffff', '#ff00aa', '#aa00ff'], // entity 0: magenta
+      ['#00ffff', '#00ff44', '#00ffaa', '#44ff00', '#aaffff', '#00ccff'], // entity 1: cyan/green
+    ];
 
-    // Draw ghost trail segments (most recent = index 0, oldest = last)
-    const allPositions = [qixPos, ...qixTrail];
-    for (let seg = allPositions.length - 1; seg >= 1; seg--) {
-      const pos = allPositions[seg];
-      const alpha = 0.12 * (1 - seg / allPositions.length);
-      const scale = 1 - seg / allPositions.length * 0.6;
-      const sx = dims.offsetX + pos.x;
-      const sy = dims.offsetY + pos.y;
+    for (let ei = 0; ei < qixEntities.length; ei++) {
+      const entity = qixEntities[ei];
+      const qixColors = entityColorSets[ei % entityColorSets.length];
+      const shadowColor = ei === 0 ? 'rgba(255, 0, 255, 0.95)' : 'rgba(0, 255, 200, 0.95)';
+      const trailShadow = ei === 0 ? 'rgba(255, 0, 255, 0.6)' : 'rgba(0, 255, 200, 0.6)';
+
+      // Derive velocity direction from trail for squash/stretch
+      const velX = entity.trail.length > 0 ? entity.pos.x - entity.trail[0].x : 0;
+      const velY = entity.trail.length > 0 ? entity.pos.y - entity.trail[0].y : 0;
+      const velAngle = Math.atan2(velY, velX);
+      const velMag = Math.hypot(velX, velY);
+      const stretchAmt = Math.min(velMag / 3, 1);
+
+      // Draw ghost trail segments (most recent = index 0, oldest = last)
+      const allPositions = [entity.pos, ...entity.trail];
+      for (let seg = allPositions.length - 1; seg >= 1; seg--) {
+        const pos = allPositions[seg];
+        const alpha = 0.12 * (1 - seg / allPositions.length);
+        const scale = 1 - seg / allPositions.length * 0.6;
+        const sx = dims.offsetX + pos.x;
+        const sy = dims.offsetY + pos.y;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = trailShadow;
+        for (let i = 0; i < 6; i++) {
+          const angle = t * 1.8 + (i * Math.PI / 3);
+          const baseLen = (36 + Math.sin(t * 2.5 + i * 1.3) * 14) * scale;
+          ctx.strokeStyle = qixColors[i];
+          ctx.lineWidth = 2 * scale;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(angle) * baseLen, sy + Math.sin(angle) * baseLen);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Draw the main Qix head with squash/stretch
+      const qx = dims.offsetX + entity.pos.x;
+      const qy = dims.offsetY + entity.pos.y;
       ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = 'rgba(255, 0, 255, 0.6)';
+      ctx.shadowBlur = 35;
+      ctx.shadowColor = shadowColor;
       for (let i = 0; i < 6; i++) {
         const angle = t * 1.8 + (i * Math.PI / 3);
-        const baseLen = (36 + Math.sin(t * 2.5 + i * 1.3) * 14) * scale;
+        const baseLen = 36 + Math.sin(t * 2.5 + i * 1.3) * 14;
+        const dot = Math.cos(angle - velAngle);
+        const len = baseLen * (1 + dot * 0.45 * stretchAmt);
         ctx.strokeStyle = qixColors[i];
-        ctx.lineWidth = 2 * scale;
+        ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(sx + Math.cos(angle) * baseLen, sy + Math.sin(angle) * baseLen);
+        ctx.moveTo(qx, qy);
+        ctx.lineTo(qx + Math.cos(angle) * len, qy + Math.sin(angle) * len);
         ctx.stroke();
       }
       ctx.restore();
     }
-
-    // Draw the main Qix head with squash/stretch
-    const qx = dims.offsetX + qixPos.x;
-    const qy = dims.offsetY + qixPos.y;
-    ctx.save();
-    ctx.shadowBlur = 35;
-    ctx.shadowColor = 'rgba(255, 0, 255, 0.95)';
-    for (let i = 0; i < 6; i++) {
-      const angle = t * 1.8 + (i * Math.PI / 3);
-      const baseLen = 36 + Math.sin(t * 2.5 + i * 1.3) * 14;
-      // Squash/stretch: arms aligned with velocity get longer, perpendicular get shorter
-      const dot = Math.cos(angle - velAngle);
-      const len = baseLen * (1 + dot * 0.45 * stretchAmt);
-      ctx.strokeStyle = qixColors[i];
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(qx, qy);
-      ctx.lineTo(qx + Math.cos(angle) * len, qy + Math.sin(angle) * len);
-      ctx.stroke();
-    }
-    ctx.restore();
   }
 
   // End of shaken region — restore transform saved before the shake translate
@@ -599,4 +728,5 @@ export function renderFrame(
   }
 
   ctx.restore();
+
 }
