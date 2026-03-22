@@ -328,6 +328,11 @@ export default function App() {
         }
 
         if (state.capturedPercent >= getLevelGoal(state.level)) {
+          // Fill remaining empty field with sand so the board looks complete
+          for (let i = 0; i < GRID_W * GRID_H; i++) {
+            if (state.grid[i] === CELL.EMPTY) state.grid[i] = CELL.FILLED;
+          }
+          state.gridVersion++;
           levelClearTimerRef.current = 0;
           setStage('LEVEL_CLEAR');
         }

@@ -1,19 +1,17 @@
 /**
- * territory.ts — fillCapturedArea: dual-seed BFS fill.
+ * territory.ts — fillCapturedArea: outer-border flood fill.
  *
  * Algorithm:
  *  1. Bresenham-stamp any trail gaps as NEWLINE.
- *  2. Two BFS from seeds perpendicular to player's last direction.
- *  3. Overlap check: if region1 + region2 > totalEmpty, both seeds are in
- *     the same connected component (trail too short to divide the field).
- *     In that case, revert NEWLINE→EMPTY and return 0 (no capture).
- *  4. Fill the smaller enclosed region with FILLED; NEWLINE→LINE.
- *  5. Rescue trapped QIX and set up ghost traversal for isolated sparks.
+ *  2. BFS to enumerate all connected EMPTY components.
+ *  3. The largest component is the "outside" open field; all others are enclosed → FILLED.
+ *  4. NEWLINE → LINE.
+ *  5. Rescue trapped QIX; set up ghost traversal for isolated sparks.
  */
 
 import { CELL, GRID_H, GRID_W } from '../constants';
-import { Direction, type Dimensions } from '../types';
-import { getGridPos, gridToWorld, isEmptyCell, isWalkable } from './grid';
+import { type Dimensions } from '../types';
+import { getGridPos, gridToWorld, isWalkable } from './grid';
 import type { GameState } from './GameState';
 
 const DIRS4 = [[-1,0],[1,0],[0,-1],[0,1]] as [number,number][];
@@ -40,88 +38,44 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     }
   }
 
-  // ── 2. Compute seed positions based on player's last direction ────────────
-  const cp = getGridPos(state.spiderPos, dims);
-  const cx = cp.x, cy = cp.y;
+  // ── 2. Find all connected EMPTY components ───────────────────────────────
+  // After stamping NEWLINE, the open field may be split into multiple regions.
+  // The largest is always the "outside" (main open field); everything smaller
+  // is enclosed by the trail and should be captured. This approach is
+  // direction-agnostic and handles all corner shapes correctly.
+  const compId = new Int32Array(GRID_W * GRID_H).fill(-1);
+  const components: number[][] = [];
 
-  let seed1 = { x: -1, y: -1 }, seed2 = { x: -1, y: -1 };
-  switch (state.spiderDir) {
-    case Direction.LEFT:
-      seed1 = { x: cx + 1, y: cy - 1 };
-      seed2 = { x: cx + 1, y: cy + 1 };
-      break;
-    case Direction.RIGHT:
-      seed1 = { x: cx - 1, y: cy - 1 };
-      seed2 = { x: cx - 1, y: cy + 1 };
-      break;
-    case Direction.UP:
-      seed1 = { x: cx - 1, y: cy + 1 };
-      seed2 = { x: cx + 1, y: cy + 1 };
-      break;
-    case Direction.DOWN:
-      seed1 = { x: cx - 1, y: cy - 1 };
-      seed2 = { x: cx + 1, y: cy - 1 };
-      break;
-    default:
-      seed1 = { x: cx + 1, y: cy };
-      seed2 = { x: cx - 1, y: cy };
-      break;
-  }
-
-  // ── 3. BFS from each seed through EMPTY cells ────────────────────────────
-  const bfsEmpty = (sx: number, sy: number): number[] => {
-    if (sx < 0 || sx >= GRID_W || sy < 0 || sy >= GRID_H) return [];
-    if (!isEmptyCell(grid, sx, sy)) return [];
-
-    const visited = new Uint8Array(GRID_W * GRID_H);
-    const queue: [number, number][] = [[sx, sy]];
-    const cells: number[] = [];
-    visited[sy * GRID_W + sx] = 1;
-
-    while (queue.length > 0) {
-      const [qx, qy] = queue.shift()!;
-      cells.push(qy * GRID_W + qx);
+  for (let start = 0; start < GRID_W * GRID_H; start++) {
+    if (grid[start] !== CELL.EMPTY || compId[start] >= 0) continue;
+    const cid = components.length;
+    const comp: number[] = [];
+    const q = [start];
+    compId[start] = cid;
+    while (q.length > 0) {
+      const idx = q.shift()!;
+      comp.push(idx);
+      const qx = idx % GRID_W, qy = (idx / GRID_W) | 0;
       for (const [ddx, ddy] of DIRS4) {
         const nx = qx + ddx, ny = qy + ddy;
         if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-        if (visited[ny * GRID_W + nx]) continue;
-        if (!isEmptyCell(grid, nx, ny)) continue;
-        visited[ny * GRID_W + nx] = 1;
-        queue.push([nx, ny]);
+        const ni = ny * GRID_W + nx;
+        if (grid[ni] !== CELL.EMPTY || compId[ni] >= 0) continue;
+        compId[ni] = cid;
+        q.push(ni);
       }
     }
-    return cells;
-  };
-
-  const region1 = bfsEmpty(seed1.x, seed1.y);
-  const region2 = bfsEmpty(seed2.x, seed2.y);
-
-  // ── 4. Overlap check — detect degenerate (non-enclosing) trail ───────────
-  let totalEmpty = 0;
-  for (let i = 0; i < GRID_W * GRID_H; i++) {
-    if (grid[i] === CELL.EMPTY) totalEmpty++;
+    components.push(comp);
   }
 
-  // If both seeds are in the same connected component their counts sum > totalEmpty.
-  // Also guard the single-valid-seed case: if the only valid region covers > 50%
-  // of empty space it is the exterior, not an enclosed area.
-  const r1ok = region1.length > 0;
-  const r2ok = region2.length > 0;
-  const overlap = region1.length + region2.length > totalEmpty;
-
-  let toFill: number[] = [];
-  if (r1ok && r2ok && !overlap) {
-    // Valid partition — fill the smaller enclosed region
-    toFill = region1.length <= region2.length ? region1 : region2;
-  } else if (r1ok && !r2ok && region1.length <= totalEmpty * 0.5) {
-    toFill = region1; // seed2 was on NEWLINE/invalid; r1 is the enclosed area
-  } else if (r2ok && !r1ok && region2.length <= totalEmpty * 0.5) {
-    toFill = region2;
-  }
-  // else: degenerate trail (both seeds in same component, or both invalid) → fill nothing
-
-  if (toFill.length === 0) {
-    // No meaningful enclosure — revert NEWLINE→EMPTY and bail out
+  // ── 3. Identify the "outside" component via border-adjacency ──────────────
+  // The outside is the EMPTY component touching the inner perimeter (cells at
+  // row 1 / row GRID_H-2 / col 1 / col GRID_W-2). These cells are provably
+  // not enclosed because the EDGE border surrounds the entire field and the
+  // trail can only enclose interior regions. Using border-adjacency instead of
+  // "largest component" fixes cases where the player encloses a region larger
+  // than the remaining open field on their first move.
+  const bailOut = () => {
     for (let i = 0; i < GRID_W * GRID_H; i++) {
       if (grid[i] === CELL.NEWLINE) grid[i] = CELL.EMPTY;
     }
@@ -131,7 +85,38 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     state.playerDrawing  = false;
     state.fuseTimer      = 0;
     state.trailParticles = [];
-    return 0;
+  };
+
+  if (components.length <= 1) { bailOut(); return 0; }
+
+  let outsideCid = -1;
+  // Top inner row
+  for (let x = 1; x < GRID_W - 1 && outsideCid < 0; x++) {
+    const idx = GRID_W + x;
+    if (compId[idx] >= 0) outsideCid = compId[idx];
+  }
+  // Bottom inner row
+  for (let x = 1; x < GRID_W - 1 && outsideCid < 0; x++) {
+    const idx = (GRID_H - 2) * GRID_W + x;
+    if (compId[idx] >= 0) outsideCid = compId[idx];
+  }
+  // Left inner column
+  for (let y = 1; y < GRID_H - 1 && outsideCid < 0; y++) {
+    const idx = y * GRID_W + 1;
+    if (compId[idx] >= 0) outsideCid = compId[idx];
+  }
+  // Right inner column
+  for (let y = 1; y < GRID_H - 1 && outsideCid < 0; y++) {
+    const idx = y * GRID_W + (GRID_W - 2);
+    if (compId[idx] >= 0) outsideCid = compId[idx];
+  }
+
+  // Couldn't identify outside — trail didn't actually enclose anything
+  if (outsideCid < 0) { bailOut(); return 0; }
+
+  const toFill: number[] = [];
+  for (let i = 0; i < components.length; i++) {
+    if (i !== outsideCid) toFill.push(...components[i]);
   }
 
   // ── 5. Apply fill ─────────────────────────────────────────────────────────
