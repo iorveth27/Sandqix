@@ -37,8 +37,6 @@ export interface GameState {
   playerDrawing: boolean;
   /** Sand grain particles spawned along the active trail */
   trailParticles: Particle[];
-  /** Seconds the player has been stalling while drawing */
-  fuseTimer: number;
 
   // ── Bucket animation ───────────────────────────────────────────────────
   bucketAngle: number;
@@ -92,7 +90,6 @@ export function createGameState(level = 1): GameState {
     playerOnBorder: true,
     playerDrawing: false,
     trailParticles: [],
-    fuseTimer: 0,
 
     bucketAngle: 0,
     bucketTilt: 0,

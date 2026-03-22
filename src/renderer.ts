@@ -24,7 +24,6 @@ export interface RenderState {
   sparks: { pos: Point; migrating: boolean }[];
   sparksEnabled: boolean;
   bossEnabled: boolean;
-  fuseProgress: number;
   animationTime: number;
   bucketAngle: number;
   bucketTilt: number;
@@ -247,7 +246,7 @@ export function renderFrame(
     grid, gridVersion, trailParticles, trail, invalidLoop, invalidLoopTimer, playerDrawing,
     spiderPos, particles, floatingTexts, captureFlash, damageFlash, qixEntities, dissolveParticles,
     isDissolving, dissolveTimer, level, sparks,
-    sparksEnabled, bossEnabled, fuseProgress, animationTime, bucketTilt, bucketPitch,
+    sparksEnabled, bossEnabled, animationTime, bucketTilt, bucketPitch,
     captureWaveProgress, showFullArt, levelClearProgress,
   } = state;
 
@@ -542,28 +541,6 @@ export function renderFrame(
     });
     ctx.restore();
 
-    // Fuse: burning dot running from trail start toward player
-    if (fuseProgress > 0 && trail.length > 1) {
-      const fuseIdx = Math.min(
-        Math.floor(fuseProgress * (trail.length - 1)),
-        trail.length - 1,
-      );
-      const fp = trail[fuseIdx];
-      const fx = dims.offsetX + fp.x;
-      const fy = dims.offsetY + fp.y;
-      ctx.save();
-      ctx.shadowBlur = 20;
-      ctx.shadowColor = '#ff4500';
-      ctx.fillStyle = '#ffff00';
-      ctx.beginPath();
-      ctx.arc(fx, fy, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#ff4500';
-      ctx.beginPath();
-      ctx.arc(fx, fy, 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
   }
 
   // QIX entities

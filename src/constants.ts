@@ -10,8 +10,6 @@ export const CELL = { EMPTY: 0, FILLED: 1, LINE: 2, NEWLINE: 3, EDGE: 4 } as con
 // ─── Gameplay timing ───────────────────────────────────────────────────────
 /** Seconds for the player to cross the full field width */
 export const CROSS_TIME_SECONDS = 2;
-/** Seconds the player can stop while drawing before dying */
-export const FUSE_MAX_TIME = 3;
 
 // ─── Collision radii (world-space pixels) ─────────────────────────────────
 export const QIX_RADIUS = 32;
@@ -33,6 +31,8 @@ export const UI_HEIGHT_RESERVE = 90;
 
 // ─── Level progression ─────────────────────────────────────────────────────
 export const LEVEL_SPEED_SCALE = 1.1;
+/** Enemy speed multiplier applied on level 2 (tutorial) */
+export const LVL2_SPEED_MULT = 0.5;
 export const DISSOLVE_JITTER_TIME = 0.5;
 export const DISSOLVE_GRAVITY = 900;
 export const BONUS_PER_PERCENT = 1000;

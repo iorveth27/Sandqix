@@ -10,7 +10,7 @@
  * capture that isolates the spark). Rendered translucent while migrating.
  */
 
-import { CELL, CROSS_TIME_SECONDS, GRID_H, GRID_W, SPARK_RADIUS, SPARK_SPEED, SPIDER_RADIUS } from '../constants';
+import { CELL, CROSS_TIME_SECONDS, GRID_H, GRID_W, LVL2_SPEED_MULT, SPARK_RADIUS, SPARK_SPEED, SPIDER_RADIUS } from '../constants';
 import type { Dimensions } from '../types';
 import { getGridPos, gridToWorld, isWalkable } from './grid';
 import type { GameState } from './GameState';
@@ -28,7 +28,7 @@ export function tickSparks(
   dims: Dimensions,
   onDeath: () => void,
 ): void {
-  const baseSpeed  = (dims.fieldWidth / CROSS_TIME_SECONDS) * SPARK_SPEED;
+  const baseSpeed  = (dims.fieldWidth / CROSS_TIME_SECONDS) * SPARK_SPEED * (state.level === 2 ? LVL2_SPEED_MULT : 1);
   const sparkSpeed = baseSpeed * (1 + state.capturedPercent * 0.015);
 
   const playerGP = getGridPos(state.spiderPos, dims);

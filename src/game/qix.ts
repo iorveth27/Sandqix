@@ -9,7 +9,7 @@
  *   prevents tunneling through thin player trails.
  */
 
-import { LEVEL_SPEED_SCALE, QIX_RADIUS, QIX_WANDER_JITTER, SPIDER_RADIUS } from '../constants';
+import { LEVEL_SPEED_SCALE, LVL2_SPEED_MULT, QIX_RADIUS, QIX_WANDER_JITTER, SPIDER_RADIUS } from '../constants';
 import type { Dimensions, QixEntity } from '../types';
 import { getGridPos, isEmptyCell, isTrailCell } from './grid';
 import type { GameState } from './GameState';
@@ -40,7 +40,7 @@ export function tickQixEntity(
   if (state.damageFlash > 0) return;
 
   const captureRatio = state.capturedPercent / 100;
-  const speedMult = Math.pow(LEVEL_SPEED_SCALE, state.level - 1);
+  const speedMult = Math.pow(LEVEL_SPEED_SCALE, state.level - 1) * (state.level === 2 ? LVL2_SPEED_MULT : 1);
   const QIX_SPEED = dims.fieldWidth * 0.25 * (1 + captureRatio * 1.5) * speedMult;
   const dynamicJitter = QIX_WANDER_JITTER * (1 + captureRatio * 3);
   entity.angle += (Math.random() * 2 - 1) * dynamicJitter;

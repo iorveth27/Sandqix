@@ -77,7 +77,6 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     state.invalidLoop    = [];
     state.playerOnBorder = true;
     state.playerDrawing  = false;
-    state.fuseTimer      = 0;
     state.trailParticles = [];
     return 0;
   }
@@ -220,7 +219,6 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
   state.invalidLoop     = [];
   state.playerOnBorder  = true;
   state.playerDrawing   = false;
-  state.fuseTimer       = 0;
   state.trailParticles  = [];
 
   return capturedThisTime;

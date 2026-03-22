@@ -9,12 +9,11 @@ interface OverlaysProps {
   isPaused: boolean;
   capturedPercent: number;
   level: number;
+  deathReason: 'QIX' | 'Sparks';
   sparksEnabled: boolean;
   bossEnabled: boolean;
-  fuseEnabled: boolean;
   onToggleSparks: () => void;
   onToggleBoss: () => void;
-  onToggleFuse: () => void;
   onRestart: () => void;
   onResume: () => void;
   onNextLevel: () => void;
@@ -22,9 +21,9 @@ interface OverlaysProps {
 }
 
 export function Overlays({
-  gameStage, isPaused, capturedPercent, level,
-  sparksEnabled, bossEnabled, fuseEnabled,
-  onToggleSparks, onToggleBoss, onToggleFuse, onRestart, onResume, onNextLevel, onWipeProgress,
+  gameStage, isPaused, capturedPercent, level, deathReason,
+  sparksEnabled, bossEnabled,
+  onToggleSparks, onToggleBoss, onRestart, onResume, onNextLevel, onWipeProgress,
 }: OverlaysProps) {
   return (
     <AnimatePresence>
@@ -36,9 +35,14 @@ export function Overlays({
           className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] text-white"
         >
           <h2 className="text-4xl font-sans font-bold tracking-tight">Game Over</h2>
-          <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">
-            Level {level} — {capturedPercent}% captured
-          </p>
+          <div className="flex flex-col items-center gap-1">
+            <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">
+              Captured {capturedPercent}%
+            </p>
+            <p className="text-white/40 text-center text-sm font-medium uppercase tracking-widest">
+              Killed by {deathReason}
+            </p>
+          </div>
           <button
             onClick={onRestart}
             className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
@@ -56,20 +60,15 @@ export function Overlays({
           animate={{ opacity: 1, scale: 1 }}
           className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-amber-500/30 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(251,191,36,0.2)] text-white"
         >
-          <div className="flex flex-col items-center gap-2">
-            <h2 className="text-5xl font-sans font-black tracking-tight text-amber-400">
-              Level {level + 1}
-            </h2>
-            <p className="text-white/60 text-sm font-medium uppercase tracking-widest">
-              Get ready...
-            </p>
-          </div>
+          <h2 className="text-5xl font-sans font-black tracking-tight text-amber-400">
+            Level {level + 1}
+          </h2>
           <button
             onClick={onNextLevel}
             className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
           >
-            <ArrowRight className="mr-2 w-5 h-5" />
-            Next Level
+            <Play className="mr-2 w-5 h-5 fill-current" />
+            Play
           </button>
         </motion.div>
       )}
@@ -96,7 +95,6 @@ export function Overlays({
               {[
                 { label: 'Sparks', enabled: sparksEnabled, onToggle: onToggleSparks },
                 { label: 'Boss', enabled: bossEnabled, onToggle: onToggleBoss },
-                { label: 'Fuse', enabled: fuseEnabled, onToggle: onToggleFuse },
               ].map(({ label, enabled, onToggle }) => (
                 <button
                   key={label}

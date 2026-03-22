@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ASPECT_RATIO, CELL, DISSOLVE_GRAVITY, DISSOLVE_JITTER_TIME,
-  FIELD_MARGIN, FUSE_MAX_TIME, GRID_H, GRID_W, LEVEL_PALETTES,
+  FIELD_MARGIN, GRID_H, GRID_W, LEVEL_PALETTES,
   UI_HEIGHT_RESERVE,
 } from './constants';
 import { Direction, type Dimensions, type DissolveParticle, type QixEntity } from './types';
@@ -27,7 +27,7 @@ import { tickParticles } from './game/particles';
 
 type GameStage = 'PLAYING' | 'LEVEL_CLEAR' | 'DISSOLVE' | 'INTERSTITIAL' | 'GAMEOVER';
 
-const getLevelGoal = (level: number) => level >= 5 ? 75 : 65;
+const getLevelGoal = (level: number) => level === 1 ? 50 : level === 2 ? 60 : level === 3 ? 65 : 75;
 
 const FILL_WAVE_DURATION = 1.8; // seconds to animate filling remaining cells
 
@@ -103,10 +103,10 @@ export default function App() {
   const [isPaused,        setIsPaused]        = useState(false);
   const [sparksEnabled,   setSparksEnabled]   = useState(() => localStorage.getItem('sparksEnabled') !== 'false');
   const [bossEnabled,     setBossEnabled]     = useState(() => localStorage.getItem('bossEnabled') !== 'false');
-  const [fuseEnabled,     setFuseEnabled]     = useState(() => localStorage.getItem('fuseEnabled') !== 'false');
   const [dimensions,      setDimensions]      = useState<Dimensions>({ width: 0, height: 0, fieldWidth: 0, fieldHeight: 0, offsetX: 0, offsetY: 0 });
   const [capturedPercent, setCapturedPercent] = useState(0);
   const [level,           setLevel]           = useState(1);
+  const [deathReason,     setDeathReason]     = useState<'QIX' | 'Sparks'>('QIX');
   const [loopKey,         setLoopKey]         = useState(0);
   const [ftueHint,        setFtueHint]        = useState<string | null>(null);
 
@@ -118,7 +118,6 @@ export default function App() {
   const isPausedRef         = useRef(false);
   const sparksEnabledRef    = useRef(true);
   const bossEnabledRef      = useRef(true);
-  const fuseEnabledRef      = useRef(true);
   const hasStarted = useRef(false);
   const levelClearTimerRef  = useRef(0);
   const fillWaveCellsRef    = useRef<number[]>([]);
@@ -148,7 +147,7 @@ export default function App() {
   ftueOnFirstCaptureRef.current = () => {
     if (gs.current.level === 1 && !ftueFirstCaptureDoneRef.current) {
       ftueFirstCaptureDoneRef.current = true;
-      showFTUEHint('Continue until you capture all', 3500);
+      showFTUEHint('Claim the rest', 3500);
     }
   };
 
@@ -157,8 +156,8 @@ export default function App() {
     const lvl = gs.current.level;
     if (lvl === 1 && ftueStepRef.current === 'swipe') {
       ftueStepRef.current = 'connect';
-      showFTUEHint('Connect line to capture the territory', 3500);
-    } else if ((lvl === 2 || lvl === 3) && enemiesFrozenRef.current) {
+      showFTUEHint('Connect the line', 3500);
+    } else if (lvl === 2 && enemiesFrozenRef.current) {
       enemiesFrozenRef.current = false;
       if (ftueHintTimerRef.current) clearTimeout(ftueHintTimerRef.current);
       setFtueHint(null);
@@ -168,7 +167,6 @@ export default function App() {
   useEffect(() => { isPausedRef.current  = isPaused;  }, [isPaused]);
   useEffect(() => { sparksEnabledRef.current = sparksEnabled; localStorage.setItem('sparksEnabled', String(sparksEnabled)); }, [sparksEnabled]);
   useEffect(() => { bossEnabledRef.current   = bossEnabled;   localStorage.setItem('bossEnabled',   String(bossEnabled));   }, [bossEnabled]);
-  useEffect(() => { fuseEnabledRef.current   = fuseEnabled;   localStorage.setItem('fuseEnabled',   String(fuseEnabled));   }, [fuseEnabled]);
 
   const makeQix = (x: number, y: number): QixEntity => {
     const angle = Math.PI / 4 + Math.floor(Math.random() * 4) * (Math.PI / 2);
@@ -217,25 +215,14 @@ export default function App() {
         { pos: gridToWorld(s1gx, s1gy, dims), gx: s1gx, gy: s1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: s1gx, targetGY: s1gy },
         { pos: gridToWorld(s2gx, s2gy, dims), gx: s2gx, gy: s2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: s2gx, targetGY: s2gy },
       ];
-      enemiesFrozenRef.current = true;
-      ftueStepRef.current = 'done';
-      showFTUEHint('Sparks kill you when they touch you');
-    } else if (lvl === 3) {
-      // FTUE: QIX + sparks, frozen
       state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
-      const s1gx = Math.round(0.25 * (GRID_W - 1)), s1gy = GRID_H - 1;
-      const s2gx = Math.round(0.75 * (GRID_W - 1)), s2gy = GRID_H - 1;
-      state.sparks = [
-        { pos: gridToWorld(s1gx, s1gy, dims), gx: s1gx, gy: s1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: s1gx, targetGY: s1gy },
-        { pos: gridToWorld(s2gx, s2gy, dims), gx: s2gx, gy: s2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: s2gx, targetGY: s2gy },
-      ];
       enemiesFrozenRef.current = true;
       ftueStepRef.current = 'done';
-      showFTUEHint('Qix can kill you when you draw');
+      showFTUEHint('Avoid enemies');
     } else {
-      // Normal levels (4+): lvl 4 = 1 QIX, lvl 5+ = 2 QIX
+      // Normal levels (3+): lvl 3 = 1 QIX, lvl 4+ = 2 QIX
       state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
-      if (lvl >= 5) state.qixEntities.push(makeQix(dims.fieldWidth * 2 / 3, dims.fieldHeight / 3));
+      if (lvl >= 4) state.qixEntities.push(makeQix(dims.fieldWidth * 2 / 3, dims.fieldHeight / 3));
       const s1gx = Math.round(0.25 * (GRID_W - 1)), s1gy = GRID_H - 1;
       const s2gx = Math.round(0.75 * (GRID_W - 1)), s2gy = GRID_H - 1;
       state.sparks = [
@@ -304,7 +291,8 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const handleDeath = () => {
+    const handleDeath = (reason: 'QIX' | 'Sparks') => {
+      setDeathReason(reason);
       const state = gs.current;
       state.damageFlash = 0.5;
 
@@ -351,22 +339,22 @@ export default function App() {
 
         tickParticles(state, dt);
 
-        tickPlayer(state, dt, dimensions, handleDeath, () => {
+        tickPlayer(state, dt, dimensions, () => {
           const captured = fillCapturedArea(state, dimensions);
           if (captured > 0) {
             playCaptureSound();
             setCapturedPercent(state.capturedPercent);
             ftueOnFirstCaptureRef.current();
           }
-        }, fuseEnabledRef.current);
+        });
 
         if (bossEnabledRef.current && !enemiesFrozenRef.current) {
           for (const entity of state.qixEntities) {
-            tickQixEntity(entity, state, dt, dimensions, handleDeath);
+            tickQixEntity(entity, state, dt, dimensions, () => handleDeath('QIX'));
           }
         }
         if (sparksEnabledRef.current && !enemiesFrozenRef.current) {
-          tickSparks(state, dt, dimensions, handleDeath);
+          tickSparks(state, dt, dimensions, () => handleDeath('Sparks'));
         }
 
         if (state.capturedPercent >= getLevelGoal(state.level)) {
@@ -449,7 +437,6 @@ export default function App() {
         sparks:              state.sparks.map(s => ({ pos: s.pos, migrating: s.migrating })),
         sparksEnabled:       sparksEnabledRef.current,
         bossEnabled:         bossEnabledRef.current,
-        fuseProgress:        state.playerDrawing ? state.fuseTimer / FUSE_MAX_TIME : 0,
         animationTime:       state.animationTime,
         bucketAngle:         state.bucketAngle,
         bucketTilt:          state.bucketTilt,
@@ -545,12 +532,11 @@ export default function App() {
           isPaused={isPaused}
           capturedPercent={capturedPercent}
           level={level}
+          deathReason={deathReason}
           sparksEnabled={sparksEnabled}
           bossEnabled={bossEnabled}
-          fuseEnabled={fuseEnabled}
           onToggleSparks={() => setSparksEnabled(v => !v)}
           onToggleBoss={() => setBossEnabled(v => !v)}
-          onToggleFuse={() => setFuseEnabled(v => !v)}
           onRestart={() => {
             setIsPaused(false);
             startGame(dimensions, { level: savedLevelRef.current });
@@ -564,11 +550,9 @@ export default function App() {
             localStorage.removeItem('savedLevel');
             localStorage.removeItem('sparksEnabled');
             localStorage.removeItem('bossEnabled');
-            localStorage.removeItem('fuseEnabled');
             savedLevelRef.current = 1;
             setSparksEnabled(true);
             setBossEnabled(true);
-            setFuseEnabled(true);
             setIsPaused(false);
             startGame(dimensions, { level: 1 });
             setLoopKey(k => k + 1);

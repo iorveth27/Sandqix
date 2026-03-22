@@ -1,5 +1,5 @@
 /**
- * player.ts — spider movement, trail management, fuse timer,
+ * player.ts — spider movement, trail management,
  * sand grain particle spawning, and bucket tilt/pitch animation.
  *
  * Walking rules:
@@ -8,7 +8,7 @@
  *  - Touching a NEWLINE cell while drawing = lethal self-intersection.
  */
 
-import { CELL, CROSS_TIME_SECONDS, FUSE_MAX_TIME, GRID_H, GRID_W } from '../constants';
+import { CELL, CROSS_TIME_SECONDS, GRID_H, GRID_W } from '../constants';
 import { Direction, type Dimensions } from '../types';
 import { getGridPos, isEmptyCell, isTrailCell, isWalkable } from './grid';
 import type { GameState } from './GameState';
@@ -17,9 +17,7 @@ export function tickPlayer(
   state: GameState,
   dt: number,
   dims: Dimensions,
-  onDeath: () => void,
   onCaptureArea: () => void,
-  fuseEnabled: boolean,
 ): void {
   // ── Bucket tilt/pitch animation ─────────────────────────────────────────
   let targetTilt = 0;
@@ -32,21 +30,6 @@ export function tickPlayer(
 
   state.bucketTilt  += (targetTilt  - state.bucketTilt)  * (dt * 12);
   state.bucketPitch += (targetPitch - state.bucketPitch) * (dt * 12);
-
-  // ── Fuse (stall-while-drawing penalty) ──────────────────────────────────
-  if (fuseEnabled && state.playerDrawing) {
-    if (state.spiderDir === Direction.NONE) {
-      state.fuseTimer += dt;
-      if (state.fuseTimer >= FUSE_MAX_TIME) {
-        onDeath();
-        return;
-      }
-    } else {
-      state.fuseTimer = 0;
-    }
-  } else {
-    state.fuseTimer = 0;
-  }
 
   if (state.spiderDir === Direction.NONE) return;
 

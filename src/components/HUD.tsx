@@ -100,9 +100,15 @@ export function HUD({ isVisible, level, capturedPercent, goalPercent, onPause }:
                   gap: '4px',
                 }}
               >
-                <span style={{ opacity: 0.6 }}>Goal:</span>
-                <AnimatedCounter value={remaining} fontSize={22} />
-                <span>%</span>
+                {remaining === 0 ? (
+                  <span>WIN!</span>
+                ) : (
+                  <>
+                    <span style={{ opacity: 0.6 }}>Claim</span>
+                    <AnimatedCounter value={remaining} fontSize={22} />
+                    <span>%</span>
+                  </>
+                )}
               </span>
             </div>
 
