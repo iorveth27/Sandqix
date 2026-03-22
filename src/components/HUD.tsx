@@ -22,9 +22,9 @@ export function HUD({ isVisible, level, capturedPercent, goalPercent, onPause }:
         >
           <div className="absolute top-4 left-0 right-0 flex justify-center items-center gap-3 px-4 pointer-events-none">
 
-            {/* Progress — centered */}
+            {/* Level pill — left */}
             <div
-              className="flex flex-col items-center justify-center px-5 py-2 rounded-2xl pointer-events-auto flex-1 gap-0.5"
+              className="flex items-center justify-center px-4 py-2 rounded-2xl pointer-events-auto"
               style={{
                 background: 'rgba(255,255,255,0.08)',
                 backdropFilter: 'blur(12px)',
@@ -34,16 +34,29 @@ export function HUD({ isVisible, level, capturedPercent, goalPercent, onPause }:
               }}
             >
               <span
+                className="font-black tabular-nums"
                 style={{
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'rgba(253, 230, 138, 0.55)',
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
+                  fontSize: '16px',
+                  color: '#fde68a',
+                  textShadow: '0 0 8px rgba(245,166,35,0.8), 0 2px 4px rgba(0,0,0,0.9)',
+                  letterSpacing: '0.04em',
                 }}
               >
-                Level {level}
+                Lvl {level}
               </span>
+            </div>
+
+            {/* Progress % — centered */}
+            <div
+              className="flex items-center justify-center px-5 py-2 rounded-2xl pointer-events-auto flex-1"
+              style={{
+                background: 'rgba(255,255,255,0.08)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                border: '1.5px solid rgba(255, 200, 100, 0.3)',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15)',
+              }}
+            >
               <span
                 className="font-black tabular-nums leading-none"
                 style={{
