@@ -129,6 +129,7 @@ export default function App() {
 
   const handleFirstInputRef    = useRef<() => void>(() => {});
   const ftueFirstCaptureDoneRef = useRef(false);
+  const ftueLevel3ShownRef      = useRef(false);
   const ftueOnFirstCaptureRef  = useRef<() => void>(() => {});
 
   const setStage = (s: GameStage) => {
@@ -207,6 +208,7 @@ export default function App() {
       enemiesFrozenRef.current = false;
       ftueStepRef.current = 'swipe';
       ftueFirstCaptureDoneRef.current = false;
+      ftueLevel3ShownRef.current      = false;
       setFtueHint('Swipe to move');
     } else if (lvl === 2) {
       // 1 spark (frozen until first input), 1 QIX
@@ -230,7 +232,12 @@ export default function App() {
       ];
       enemiesFrozenRef.current = false;
       ftueStepRef.current = 'done';
-      setFtueHint(null);
+      if (lvl === 3 && !ftueLevel3ShownRef.current) {
+        ftueLevel3ShownRef.current = true;
+        showFTUEHint('Have fun!', 3500);
+      } else {
+        setFtueHint(null);
+      }
     }
 
     gs.current = state;
