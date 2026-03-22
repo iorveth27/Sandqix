@@ -36,6 +36,9 @@ export function tickQixEntity(
   dims: Dimensions,
   onDeath: () => void,
 ): void {
+  // Honour post-death invincibility frames (same guard as sparks)
+  if (state.damageFlash > 0) return;
+
   const captureRatio = state.capturedPercent / 100;
   const speedMult = Math.pow(LEVEL_SPEED_SCALE, state.level - 1);
   const QIX_SPEED = dims.fieldWidth * 0.25 * (1 + captureRatio * 1.5) * speedMult;

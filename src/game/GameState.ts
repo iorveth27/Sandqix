@@ -56,12 +56,10 @@ export interface GameState {
   damageFlash: number;
   animationTime: number;
 
-  // ── Scores / Level ─────────────────────────────────────────────────────
+  // ── Level ──────────────────────────────────────────────────────────────
   capturedPercent: number;
   lives: number;
   level: number;
-  score: number;
-  levelBonus: number;
 
   // ── Dissolve ───────────────────────────────────────────────────────────
   dissolveParticles: DissolveParticle[];
@@ -113,8 +111,6 @@ export function createGameState(level = 1): GameState {
     capturedPercent: 0,
     lives: 3,
     level,
-    score: 0,
-    levelBonus: 0,
 
     dissolveParticles: [],
     dissolveTimer: 0,

@@ -4,10 +4,11 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
-  ASPECT_RATIO, BONUS_PER_PERCENT, CELL, DISSOLVE_GRAVITY, DISSOLVE_JITTER_TIME,
+  ASPECT_RATIO, CELL, DISSOLVE_GRAVITY, DISSOLVE_JITTER_TIME,
   FIELD_MARGIN, FUSE_MAX_TIME, GRID_H, GRID_W, LEVEL_CLEAR_DELAY, LEVEL_PALETTES,
-  UI_HEIGHT_RESERVE, WIN_PERCENT,
+  UI_HEIGHT_RESERVE,
 } from './constants';
 import { Direction, type Dimensions, type DissolveParticle, type QixEntity } from './types';
 import { playCaptureSound } from './audio';
@@ -25,6 +26,8 @@ import { tickSparks } from './game/sparks';
 import { tickParticles } from './game/particles';
 
 type GameStage = 'PLAYING' | 'LEVEL_CLEAR' | 'DISSOLVE' | 'INTERSTITIAL' | 'GAMEOVER';
+
+const getLevelGoal = (level: number) => level >= 5 ? 75 : 65;
 
 function createDissolveParticles(state: GameState, dims: Dimensions): DissolveParticle[] {
   const particles: DissolveParticle[] = [];
@@ -65,10 +68,8 @@ export default function App() {
   const [capturedPercent, setCapturedPercent] = useState(0);
   const [lives,           setLives]           = useState(3);
   const [level,           setLevel]           = useState(1);
-  const [score,           setScore]           = useState(0);
-  const [highscore,       setHighscore]       = useState(() => parseInt(localStorage.getItem('highscore') ?? '0', 10));
-  const [levelBonus,      setLevelBonus]      = useState(0);
   const [loopKey,         setLoopKey]         = useState(0);
+  const [ftueHint,        setFtueHint]        = useState<string | null>(null);
 
   const gs = useRef(createGameState());
 
@@ -80,12 +81,47 @@ export default function App() {
   const bossEnabledRef      = useRef(true);
   const fuseEnabledRef      = useRef(true);
   const hasStarted = useRef(false);
-  const highscoreRef = useRef(parseInt(localStorage.getItem('highscore') ?? '0', 10));
   const levelClearTimerRef = useRef(0);
+  const savedLevelRef = useRef(parseInt(localStorage.getItem('savedLevel') ?? '1', 10));
+  const enemiesFrozenRef   = useRef(false);
+  const ftueStepRef        = useRef<'swipe' | 'connect' | 'done'>('done');
+  const ftueHintTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleFirstInputRef    = useRef<() => void>(() => {});
+  const ftueFirstCaptureDoneRef = useRef(false);
+  const ftueOnFirstCaptureRef  = useRef<() => void>(() => {});
 
   const setStage = (s: GameStage) => {
     gameStageRef.current = s;
     setGameStage(s);
+  };
+
+  const showFTUEHint = (text: string, autofadeMs?: number) => {
+    if (ftueHintTimerRef.current) clearTimeout(ftueHintTimerRef.current);
+    setFtueHint(text);
+    if (autofadeMs) {
+      ftueHintTimerRef.current = setTimeout(() => setFtueHint(null), autofadeMs);
+    }
+  };
+
+  ftueOnFirstCaptureRef.current = () => {
+    if (gs.current.level === 1 && !ftueFirstCaptureDoneRef.current) {
+      ftueFirstCaptureDoneRef.current = true;
+      showFTUEHint('Continue until you capture all', 3500);
+    }
+  };
+
+  // Re-assigned each render so closures in event handlers stay fresh via the ref
+  handleFirstInputRef.current = () => {
+    const lvl = gs.current.level;
+    if (lvl === 1 && ftueStepRef.current === 'swipe') {
+      ftueStepRef.current = 'connect';
+      showFTUEHint('Connect line to capture the territory', 3500);
+    } else if ((lvl === 2 || lvl === 3) && enemiesFrozenRef.current) {
+      enemiesFrozenRef.current = false;
+      if (ftueHintTimerRef.current) clearTimeout(ftueHintTimerRef.current);
+      setFtueHint(null);
+    }
   };
 
   useEffect(() => { isPausedRef.current  = isPaused;  }, [isPaused]);
@@ -107,36 +143,72 @@ export default function App() {
     };
   };
 
-  const startGame = (dims: Dimensions, opts?: { level?: number; lives?: number; score?: number }) => {
+  const startGame = (dims: Dimensions, opts?: { level?: number; lives?: number }) => {
     const lvl = opts?.level ?? 1;
     const state = createGameState(lvl);
 
     // Player starts at the middle of the top EDGE row so moving DOWN enters EMPTY immediately
     state.spiderPos = { x: dims.fieldWidth / 2, y: 0 };
 
-    // QIX entities based on level
-    state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
-    if (lvl >= 3) {
-      state.qixEntities.push(makeQix(dims.fieldWidth * 2 / 3, dims.fieldHeight / 3));
-    }
-
     state.lives = Math.min(opts?.lives ?? 3, 3);
-    state.score = opts?.score ?? 0;
     state.level = lvl;
 
-    // Sparks start on the bottom EDGE row
-    const spark1gx = Math.round(0.25 * (GRID_W - 1));
-    const spark1gy = GRID_H - 1;
-    const spark2gx = Math.round(0.75 * (GRID_W - 1));
-    const spark2gy = GRID_H - 1;
-    state.sparks = [
-      { pos: gridToWorld(spark1gx, spark1gy, dims), gx: spark1gx, gy: spark1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: spark1gx, targetGY: spark1gy },
-      { pos: gridToWorld(spark2gx, spark2gy, dims), gx: spark2gx, gy: spark2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: spark2gx, targetGY: spark2gy },
-    ];
+    // Persist current level so game over restarts from here
+    savedLevelRef.current = lvl;
+    localStorage.setItem('savedLevel', String(lvl));
+
+    // FTUE: enemies and hints vary by level
+    if (ftueHintTimerRef.current) clearTimeout(ftueHintTimerRef.current);
+
+    if (lvl === 1) {
+      // Tutorial level — no enemies
+      state.qixEntities = [];
+      state.sparks = [];
+      enemiesFrozenRef.current = false;
+      ftueStepRef.current = 'swipe';
+      ftueFirstCaptureDoneRef.current = false;
+      setFtueHint('Swipe to move');
+    } else if (lvl === 2) {
+      // FTUE: sparks only, frozen
+      state.qixEntities = [];
+      const s1gx = Math.round(0.25 * (GRID_W - 1)), s1gy = GRID_H - 1;
+      const s2gx = Math.round(0.75 * (GRID_W - 1)), s2gy = GRID_H - 1;
+      state.sparks = [
+        { pos: gridToWorld(s1gx, s1gy, dims), gx: s1gx, gy: s1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: s1gx, targetGY: s1gy },
+        { pos: gridToWorld(s2gx, s2gy, dims), gx: s2gx, gy: s2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: s2gx, targetGY: s2gy },
+      ];
+      enemiesFrozenRef.current = true;
+      ftueStepRef.current = 'done';
+      showFTUEHint('Sparks kill you when they touch you');
+    } else if (lvl === 3) {
+      // FTUE: QIX + sparks, frozen
+      state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
+      const s1gx = Math.round(0.25 * (GRID_W - 1)), s1gy = GRID_H - 1;
+      const s2gx = Math.round(0.75 * (GRID_W - 1)), s2gy = GRID_H - 1;
+      state.sparks = [
+        { pos: gridToWorld(s1gx, s1gy, dims), gx: s1gx, gy: s1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: s1gx, targetGY: s1gy },
+        { pos: gridToWorld(s2gx, s2gy, dims), gx: s2gx, gy: s2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: s2gx, targetGY: s2gy },
+      ];
+      enemiesFrozenRef.current = true;
+      ftueStepRef.current = 'done';
+      showFTUEHint('Qix can kill you when you draw');
+    } else {
+      // Normal levels (4+): lvl 4 = 1 QIX, lvl 5+ = 2 QIX
+      state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
+      if (lvl >= 5) state.qixEntities.push(makeQix(dims.fieldWidth * 2 / 3, dims.fieldHeight / 3));
+      const s1gx = Math.round(0.25 * (GRID_W - 1)), s1gy = GRID_H - 1;
+      const s2gx = Math.round(0.75 * (GRID_W - 1)), s2gy = GRID_H - 1;
+      state.sparks = [
+        { pos: gridToWorld(s1gx, s1gy, dims), gx: s1gx, gy: s1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: s1gx, targetGY: s1gy },
+        { pos: gridToWorld(s2gx, s2gy, dims), gx: s2gx, gy: s2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: s2gx, targetGY: s2gy },
+      ];
+      enemiesFrozenRef.current = false;
+      ftueStepRef.current = 'done';
+      setFtueHint(null);
+    }
 
     gs.current = state;
     setLevel(lvl);
-    setScore(state.score);
     setCapturedPercent(0);
     setLives(state.lives);
     setStage('PLAYING');
@@ -198,6 +270,7 @@ export default function App() {
       state.lives      -= 1;
       state.damageFlash = 0.5;
       setLives(state.lives);
+
 
       // Sand grain death explosion
       for (let ei = 0; ei < 150; ei++) {
@@ -261,25 +334,26 @@ export default function App() {
       state.playerDrawing  = false;
       state.fuseTimer      = 0;
 
-      // Reset sparks to the walkable cells farthest from the player's respawn position
-      const respawnGP = getGridPos(bestPos, dimensions);
-      const sparkCandidates: { gx: number; gy: number; dist: number }[] = [];
-      for (let i = 0; i < GRID_W * GRID_H; i++) {
-        const cgx = i % GRID_W, cgy = Math.floor(i / GRID_W);
-        if (isWalkable(state.grid, cgx, cgy)) {
-          sparkCandidates.push({ gx: cgx, gy: cgy, dist: Math.abs(cgx - respawnGP.x) + Math.abs(cgy - respawnGP.y) });
+      // Reset sparks only for levels that actually have them
+      if (state.sparks.length > 0) {
+        const respawnGP = getGridPos(bestPos, dimensions);
+        const sparkCandidates: { gx: number; gy: number; dist: number }[] = [];
+        for (let i = 0; i < GRID_W * GRID_H; i++) {
+          const cgx = i % GRID_W, cgy = Math.floor(i / GRID_W);
+          if (isWalkable(state.grid, cgx, cgy)) {
+            sparkCandidates.push({ gx: cgx, gy: cgy, dist: Math.abs(cgx - respawnGP.x) + Math.abs(cgy - respawnGP.y) });
+          }
         }
+        sparkCandidates.sort((a, b) => b.dist - a.dist);
+        const sp1 = sparkCandidates[0] ?? { gx: Math.round(0.25 * (GRID_W - 1)), gy: GRID_H - 1 };
+        const sp2 = sparkCandidates.find(c => Math.abs(c.gx - sp1.gx) + Math.abs(c.gy - sp1.gy) > GRID_W / 3)
+                 ?? sparkCandidates[1]
+                 ?? { gx: Math.round(0.75 * (GRID_W - 1)), gy: GRID_H - 1 };
+        state.sparks = [
+          { pos: gridToWorld(sp1.gx, sp1.gy, dimensions), gx: sp1.gx, gy: sp1.gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: sp1.gx, targetGY: sp1.gy },
+          { pos: gridToWorld(sp2.gx, sp2.gy, dimensions), gx: sp2.gx, gy: sp2.gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: sp2.gx, targetGY: sp2.gy },
+        ];
       }
-      sparkCandidates.sort((a, b) => b.dist - a.dist);
-      const sp1 = sparkCandidates[0] ?? { gx: Math.round(0.25 * (GRID_W - 1)), gy: GRID_H - 1 };
-      // sp2: farthest candidate that's also well-separated from sp1
-      const sp2 = sparkCandidates.find(c => Math.abs(c.gx - sp1.gx) + Math.abs(c.gy - sp1.gy) > GRID_W / 3)
-               ?? sparkCandidates[1]
-               ?? { gx: Math.round(0.75 * (GRID_W - 1)), gy: GRID_H - 1 };
-      state.sparks = [
-        { pos: gridToWorld(sp1.gx, sp1.gy, dimensions), gx: sp1.gx, gy: sp1.gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: sp1.gx, targetGY: sp1.gy },
-        { pos: gridToWorld(sp2.gx, sp2.gy, dimensions), gx: sp2.gx, gy: sp2.gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: sp2.gx, targetGY: sp2.gy },
-      ];
     };
 
     const update = (time: number) => {
@@ -311,43 +385,21 @@ export default function App() {
           const captured = fillCapturedArea(state, dimensions);
           if (captured > 0) {
             playCaptureSound();
-            const earned = Math.round(Math.pow(captured, 1.8) * 80);
-            state.score += earned;
-            state.floatingTexts.push({
-              pos: { ...state.spiderPos },
-              text: `+${earned.toLocaleString()}`,
-              life: 1.8,
-              maxLife: 1.8,
-            });
-            if (state.score > (highscoreRef.current ?? 0)) {
-              highscoreRef.current = state.score;
-              setHighscore(state.score);
-              localStorage.setItem('highscore', String(state.score));
-            }
-            setScore(state.score);
             setCapturedPercent(state.capturedPercent);
+            ftueOnFirstCaptureRef.current();
           }
         }, fuseEnabledRef.current);
 
-        if (bossEnabledRef.current) {
+        if (bossEnabledRef.current && !enemiesFrozenRef.current) {
           for (const entity of state.qixEntities) {
             tickQixEntity(entity, state, dt, dimensions, handleDeath);
           }
         }
-        if (sparksEnabledRef.current) tickSparks(state, dt, dimensions, handleDeath);
+        if (sparksEnabledRef.current && !enemiesFrozenRef.current) {
+          tickSparks(state, dt, dimensions, handleDeath);
+        }
 
-        if (state.capturedPercent >= WIN_PERCENT) {
-          const overCapture = Math.max(0, state.capturedPercent - WIN_PERCENT);
-          const bonus = overCapture * BONUS_PER_PERCENT;
-          state.levelBonus = bonus;
-          state.score += bonus;
-          setLevelBonus(bonus);
-          setScore(state.score);
-          if (state.score > highscoreRef.current) {
-            highscoreRef.current = state.score;
-            setHighscore(state.score);
-            localStorage.setItem('highscore', String(state.score));
-          }
+        if (state.capturedPercent >= getLevelGoal(state.level)) {
           levelClearTimerRef.current = 0;
           setStage('LEVEL_CLEAR');
         }
@@ -434,6 +486,7 @@ export default function App() {
         case 'ArrowRight': case 'd': case 'D': newDir = Direction.RIGHT; break;
       }
       if (newDir !== Direction.NONE) {
+        handleFirstInputRef.current();
         const state = gs.current;
         const isOpposite =
           (state.spiderDir === Direction.UP    && newDir === Direction.DOWN)  ||
@@ -465,6 +518,7 @@ export default function App() {
 
   const handleJoystickMove = (dir: Direction) => {
     if (dir === Direction.NONE) { gs.current.spiderDir = Direction.NONE; return; }
+    handleFirstInputRef.current();
     const state = gs.current;
     const isOpposite =
       (state.spiderDir === Direction.UP    && dir === Direction.DOWN)  ||
@@ -479,8 +533,9 @@ export default function App() {
       <HUD
         isVisible={gameStage === 'PLAYING' || gameStage === 'LEVEL_CLEAR'}
         lives={lives}
-        score={score}
-        highscore={highscore}
+        level={level}
+        capturedPercent={capturedPercent}
+        goalPercent={getLevelGoal(level)}
         onPause={() => setIsPaused(true)}
       />
 
@@ -498,7 +553,6 @@ export default function App() {
           isPaused={isPaused}
           capturedPercent={capturedPercent}
           level={level}
-          score={score}
           sparksEnabled={sparksEnabled}
           bossEnabled={bossEnabled}
           fuseEnabled={fuseEnabled}
@@ -507,17 +561,97 @@ export default function App() {
           onToggleFuse={() => setFuseEnabled(v => !v)}
           onRestart={() => {
             setIsPaused(false);
-            startGame(dimensions);
+            startGame(dimensions, { level: savedLevelRef.current });
             setLoopKey(k => k + 1);
           }}
           onResume={() => setIsPaused(false)}
           onNextLevel={() => {
             const state = gs.current;
-            startGame(dimensions, { level: state.level + 1, lives: state.lives, score: state.score });
+            startGame(dimensions, { level: state.level + 1, lives: state.lives });
+          }}
+          onWipeProgress={() => {
+            localStorage.removeItem('savedLevel');
+            localStorage.removeItem('sparksEnabled');
+            localStorage.removeItem('bossEnabled');
+            localStorage.removeItem('fuseEnabled');
+            savedLevelRef.current = 1;
+            setSparksEnabled(true);
+            setBossEnabled(true);
+            setFuseEnabled(true);
+            setIsPaused(false);
+            startGame(dimensions, { level: 1 });
+            setLoopKey(k => k + 1);
           }}
         />
 
         {gameStage === 'PLAYING' && <Joystick onMove={handleJoystickMove} />}
+
+        {/* FTUE hint messages */}
+        <AnimatePresence>
+          {ftueHint && gameStage === 'PLAYING' && (
+            <motion.div
+              key={ftueHint}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, transition: { duration: 0.6 } }}
+              className="absolute inset-0 flex flex-col items-center justify-center gap-6 pointer-events-none z-30"
+            >
+              {/* Animated joystick illustration — only shown for the "Swipe to move" hint */}
+              {ftueHint === 'Swipe to move' && (
+                <div className="relative flex items-center justify-center" style={{ width: 80, height: 80 }}>
+                  {/* Base ring */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      width: 80,
+                      height: 80,
+                      borderRadius: '50%',
+                      border: '2px solid rgba(253,230,138,0.3)',
+                      background: 'rgba(255,255,255,0.05)',
+                    }}
+                  />
+                  {/* Animated knob */}
+                  <motion.div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: '50%',
+                      background: 'rgba(253,230,138,0.7)',
+                      boxShadow: '0 0 16px rgba(245,166,35,0.6)',
+                      position: 'absolute',
+                    }}
+                    animate={{
+                      x: [0, 22, 0, -22, 0],
+                      y: [0, 0, 22, 0, -22],
+                    }}
+                    transition={{
+                      duration: 2,
+                      repeat: Infinity,
+                      ease: 'easeInOut',
+                      times: [0, 0.25, 0.5, 0.75, 1],
+                    }}
+                  />
+                </div>
+              )}
+              <p
+                style={{
+                  fontFamily: 'sans-serif',
+                  fontWeight: 700,
+                  fontSize: 'clamp(16px, 4vw, 22px)',
+                  color: '#fde68a',
+                  textShadow: '0 0 20px rgba(245,166,35,0.7), 0 2px 8px rgba(0,0,0,0.9)',
+                  textAlign: 'center',
+                  maxWidth: '80%',
+                  lineHeight: 1.4,
+                  letterSpacing: '0.01em',
+                }}
+              >
+                {ftueHint}
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
       </div>
     </div>
   );

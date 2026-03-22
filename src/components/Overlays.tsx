@@ -9,7 +9,6 @@ interface OverlaysProps {
   isPaused: boolean;
   capturedPercent: number;
   level: number;
-  score: number;
   sparksEnabled: boolean;
   bossEnabled: boolean;
   fuseEnabled: boolean;
@@ -19,12 +18,13 @@ interface OverlaysProps {
   onRestart: () => void;
   onResume: () => void;
   onNextLevel: () => void;
+  onWipeProgress: () => void;
 }
 
 export function Overlays({
-  gameStage, isPaused, capturedPercent, level, score,
+  gameStage, isPaused, capturedPercent, level,
   sparksEnabled, bossEnabled, fuseEnabled,
-  onToggleSparks, onToggleBoss, onToggleFuse, onRestart, onResume, onNextLevel,
+  onToggleSparks, onToggleBoss, onToggleFuse, onRestart, onResume, onNextLevel, onWipeProgress,
 }: OverlaysProps) {
   return (
     <AnimatePresence>
@@ -36,14 +36,9 @@ export function Overlays({
           className="z-10 bg-black/80 backdrop-blur-2xl p-10 rounded-[48px] border-2 border-white/10 flex flex-col items-center gap-6 shadow-[0_0_40px_rgba(0,0,0,0.8)] text-white"
         >
           <h2 className="text-4xl font-sans font-bold tracking-tight">Game Over</h2>
-          <div className="flex flex-col items-center gap-1">
-            <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">
-              Level {level} — {capturedPercent}% captured
-            </p>
-            <p className="text-amber-400 text-center text-lg font-bold tabular-nums">
-              {score.toLocaleString()} pts
-            </p>
-          </div>
+          <p className="text-white/60 text-center text-sm font-medium uppercase tracking-widest">
+            Level {level} — {capturedPercent}% captured
+          </p>
           <button
             onClick={onRestart}
             className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
@@ -69,9 +64,6 @@ export function Overlays({
               Get ready...
             </p>
           </div>
-          <p className="text-white/50 text-base tabular-nums">
-            Score: {score.toLocaleString()}
-          </p>
           <button
             onClick={onNextLevel}
             className="flex items-center justify-center w-full py-4 bg-amber-500 text-black rounded-full font-bold text-lg transition-all hover:bg-amber-400 active:scale-95 shadow-[0_0_20px_rgba(251,191,36,0.3)] mt-2"
@@ -131,6 +123,12 @@ export function Overlays({
               >
                 <RotateCcw className="w-5 h-5" />
                 Restart
+              </button>
+              <button
+                onClick={onWipeProgress}
+                className="w-full py-3 bg-transparent text-red-400/70 border border-red-500/20 rounded-full font-bold text-sm transition-all hover:bg-red-500/10 hover:text-red-400 active:scale-95 flex items-center justify-center gap-2 mt-1"
+              >
+                Reset all progress
               </button>
             </div>
           </motion.div>
