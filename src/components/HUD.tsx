@@ -27,7 +27,9 @@ function AnimatedCounter({ value, fontSize }: { value: number; fontSize: number 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center' }}>
       {digits.map((digit, i) => (
-        <AnimatedDigit key={digits.length - i} digit={digit} fontSize={fontSize} />
+        <span key={String(digits.length - i)}>
+          <AnimatedDigit digit={digit} fontSize={fontSize} />
+        </span>
       ))}
     </span>
   );

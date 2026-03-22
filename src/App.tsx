@@ -207,15 +207,12 @@ export default function App() {
       ftueFirstCaptureDoneRef.current = false;
       setFtueHint('Swipe to move');
     } else if (lvl === 2) {
-      // FTUE: sparks only, frozen
-      state.qixEntities = [];
-      const s1gx = Math.round(0.25 * (GRID_W - 1)), s1gy = GRID_H - 1;
-      const s2gx = Math.round(0.75 * (GRID_W - 1)), s2gy = GRID_H - 1;
-      state.sparks = [
-        { pos: gridToWorld(s1gx, s1gy, dims), gx: s1gx, gy: s1gy, dir: { x: -1, y: 0 }, type: 'chaser',  migrating: false, targetGX: s1gx, targetGY: s1gy },
-        { pos: gridToWorld(s2gx, s2gy, dims), gx: s2gx, gy: s2gy, dir: { x:  1, y: 0 }, type: 'random', migrating: false, targetGX: s2gx, targetGY: s2gy },
-      ];
+      // 1 spark (frozen until first input), 1 QIX
       state.qixEntities = [makeQix(dims.fieldWidth / 2, dims.fieldHeight / 2)];
+      const sgx = Math.round(0.5 * (GRID_W - 1)), sgy = GRID_H - 1;
+      state.sparks = [
+        { pos: gridToWorld(sgx, sgy, dims), gx: sgx, gy: sgy, dir: { x: -1, y: 0 }, type: 'chaser', migrating: false, targetGX: sgx, targetGY: sgy },
+      ];
       enemiesFrozenRef.current = true;
       ftueStepRef.current = 'done';
       showFTUEHint('Avoid enemies');
