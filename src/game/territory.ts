@@ -4,20 +4,21 @@
  * Algorithm:
  *  1. Bresenham-stamp any trail gaps as NEWLINE.
  *  2. BFS to enumerate all connected EMPTY components.
- *  3. The largest component is the "outside" open field; all others are enclosed → FILLED.
+ *  3. Identify outside via QIX position (QIX levels) or largest component (no QIX).
+ *     All other components are enclosed → FILLED.
  *  4. NEWLINE → LINE.
  *  5. Rescue trapped QIX; set up ghost traversal for isolated sparks.
  */
 
 import { CELL, GRID_H, GRID_W } from '../constants';
 import { type Dimensions } from '../types';
-import { getGridPos, gridToWorld, isWalkable } from './grid';
+import { getGridPos, gridToWorld, isEmptyCell, isWalkable } from './grid';
 import type { GameState } from './GameState';
 
 const DIRS4 = [[-1,0],[1,0],[0,-1],[0,1]] as [number,number][];
 
 export function fillCapturedArea(state: GameState, dims: Dimensions): number {
-  const { grid, trail, particles, floatingTexts } = state;
+  const { grid, trail, particles } = state;
 
   // ── 1. Bresenham-stamp trail gaps as NEWLINE ─────────────────────────────
   for (let ti = 1; ti < trail.length; ti++) {
@@ -39,10 +40,8 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
   }
 
   // ── 2. Find all connected EMPTY components ───────────────────────────────
-  // After stamping NEWLINE, the open field may be split into multiple regions.
-  // The largest is always the "outside" (main open field); everything smaller
-  // is enclosed by the trail and should be captured. This approach is
-  // direction-agnostic and handles all corner shapes correctly.
+  // After stamping NEWLINE, the open field splits into connected regions.
+  // We enumerate ALL of them via BFS so we can identify inside vs outside.
   const compId = new Int32Array(GRID_W * GRID_H).fill(-1);
   const components: number[][] = [];
 
@@ -68,14 +67,9 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     components.push(comp);
   }
 
-  // ── 3. Identify the "outside" component via border-adjacency ──────────────
-  // The outside is the EMPTY component touching the inner perimeter (cells at
-  // row 1 / row GRID_H-2 / col 1 / col GRID_W-2). These cells are provably
-  // not enclosed because the EDGE border surrounds the entire field and the
-  // trail can only enclose interior regions. Using border-adjacency instead of
-  // "largest component" fixes cases where the player encloses a region larger
-  // than the remaining open field on their first move.
-  const bailOut = () => {
+  // ── 3. Identify the "outside" component ──────────────────────────────────
+  // Trail didn't split the field at all → bail out.
+  if (components.length <= 1) {
     for (let i = 0; i < GRID_W * GRID_H; i++) {
       if (grid[i] === CELL.NEWLINE) grid[i] = CELL.EMPTY;
     }
@@ -85,43 +79,44 @@ export function fillCapturedArea(state: GameState, dims: Dimensions): number {
     state.playerDrawing  = false;
     state.fuseTimer      = 0;
     state.trailParticles = [];
-  };
-
-  if (components.length <= 1) { bailOut(); return 0; }
-
-  let outsideCid = -1;
-  // Top inner row
-  for (let x = 1; x < GRID_W - 1 && outsideCid < 0; x++) {
-    const idx = GRID_W + x;
-    if (compId[idx] >= 0) outsideCid = compId[idx];
-  }
-  // Bottom inner row
-  for (let x = 1; x < GRID_W - 1 && outsideCid < 0; x++) {
-    const idx = (GRID_H - 2) * GRID_W + x;
-    if (compId[idx] >= 0) outsideCid = compId[idx];
-  }
-  // Left inner column
-  for (let y = 1; y < GRID_H - 1 && outsideCid < 0; y++) {
-    const idx = y * GRID_W + 1;
-    if (compId[idx] >= 0) outsideCid = compId[idx];
-  }
-  // Right inner column
-  for (let y = 1; y < GRID_H - 1 && outsideCid < 0; y++) {
-    const idx = y * GRID_W + (GRID_W - 2);
-    if (compId[idx] >= 0) outsideCid = compId[idx];
+    return 0;
   }
 
-  // Couldn't identify outside — trail didn't actually enclose anything
-  if (outsideCid < 0) { bailOut(); return 0; }
+  // When QIX entities exist, use their grid positions to identify which
+  // component is the open field. QIX always lives in EMPTY space; whichever
+  // component contains a QIX is the outside — even when the player encloses
+  // more than 50% of the field (making the inside larger than the outside).
+  // Fall back to "largest component = outside" for levels without QIX (1 & 2),
+  // where captures are small enough that largest reliably equals the open field.
+  let outsideCid: number;
 
-  const toFill: number[] = [];
+  if (state.qixEntities.length > 0) {
+    let foundCid = -1;
+    for (const entity of state.qixEntities) {
+      const gp = getGridPos(entity.pos, dims);
+      const cid = compId[gp.y * GRID_W + gp.x];
+      if (cid >= 0) { foundCid = cid; break; }
+    }
+    // If QIX landed on a NEWLINE cell (extremely rare) fall back to largest.
+    if (foundCid < 0) {
+      foundCid = 0;
+      for (let i = 1; i < components.length; i++) {
+        if (components[i].length > components[foundCid].length) foundCid = i;
+      }
+    }
+    outsideCid = foundCid;
+  } else {
+    // No QIX — largest component is the open field.
+    outsideCid = 0;
+    for (let i = 1; i < components.length; i++) {
+      if (components[i].length > components[outsideCid].length) outsideCid = i;
+    }
+  }
+
+  // ── 4. Fill every component that is not the outside ──────────────────────
   for (let i = 0; i < components.length; i++) {
-    if (i !== outsideCid) toFill.push(...components[i]);
-  }
-
-  // ── 5. Apply fill ─────────────────────────────────────────────────────────
-  for (const idx of toFill) {
-    grid[idx] = CELL.FILLED;
+    if (i === outsideCid) continue;
+    for (const idx of components[i]) grid[idx] = CELL.FILLED;
   }
 
   // ── 6. Convert NEWLINE → LINE ────────────────────────────────────────────
