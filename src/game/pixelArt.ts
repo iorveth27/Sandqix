@@ -57,19 +57,51 @@ function level1Art(): number[] {
   });
 }
 
-// Level 2 — Fish
+// Level 2 — Cat
+// Colors: 0=bg, 1=warm brown fur, 2=cream belly/face, 3=dark eyes/shadow, 4=pink ears/blush
 function level2Art(): number[] {
-  const cx = 9.5, cy = 9.5;
   return make((x, y) => {
-    const dx = x - cx, dy = y - cy;
-    if ((x - 6) * (x - 6) + (y - 8) * (y - 8) < 2) return 4;
-    if (x >= 6 && x <= 12 && y >= 3 && y <= 6 && dy < 0) {
-      const finVal = (x - 9) * (x - 9) / 9 + (y - 4.5) * (y - 4.5) / 2.5;
-      if (finVal < 1) return 1;
+    // ── Left ear: triangle, apex at (4.5, 0) ────────────────────────────────
+    if (y < 4.5 && Math.abs(x - 4.5) < y * 0.85 + 0.4) {
+      return (y >= 0.8 && Math.abs(x - 4.5) < y * 0.42) ? 4 : 1;
     }
-    if (x > 14 && Math.abs(dy) < (x - 14) * 0.6) return 3;
-    if ((dx / 7) * (dx / 7) + (dy / 4) * (dy / 4) < 1) return 2;
-    if ((dx / 8) * (dx / 8) + (dy / 5) * (dy / 5) < 1) return 1;
+    // ── Right ear: triangle, apex at (15, 0) ────────────────────────────────
+    if (y < 4.5 && Math.abs(x - 15) < y * 0.85 + 0.4) {
+      return (y >= 0.8 && Math.abs(x - 15) < y * 0.42) ? 4 : 1;
+    }
+
+    // ── Precompute radii used in multiple checks ──────────────────────────────
+    const headR = ((x - 9.5) / 6) ** 2 + ((y - 7.5) / 4.8) ** 2;
+    const bodyR = ((x - 9)   / 5.5) ** 2 + ((y - 14)  / 4.5) ** 2;
+
+    // ── Tail: arc on right side — annular shell of circle at (14, 11.5) ──────
+    const tR = Math.sqrt((x - 14) ** 2 + (y - 11.5) ** 2);
+    if (tR >= 2.2 && tR <= 3.6 && x >= 13 && y <= 15 && y >= 8) return 1;
+
+    // ── Paws ─────────────────────────────────────────────────────────────────
+    if (y >= 16.5 && y <= 18.5 && ((x >= 4 && x <= 7.5) || (x >= 11 && x <= 14.5))) return 2;
+
+    // ── Shadow ───────────────────────────────────────────────────────────────
+    if (((x - 8.5) / 6) ** 2 + ((y - 19.6) / 1) ** 2 < 1) return 3;
+
+    // ── Head ─────────────────────────────────────────────────────────────────
+    if (headR < 1) {
+      if ((x - 7)  ** 2 + (y - 7.5) ** 2 < 1.4) return 3;  // left eye
+      if ((x - 12) ** 2 + (y - 7.5) ** 2 < 1.4) return 3;  // right eye
+      if (((x - 5.5) / 1.8) ** 2 + ((y - 10) / 1.2) ** 2 < 1) return 4; // left blush
+      if (((x - 13.5)/ 1.8) ** 2 + ((y - 10) / 1.2) ** 2 < 1) return 4; // right blush
+      if ((x - 9.5) ** 2 + (y - 10) ** 2 < 0.6) return 3;  // nose
+      // White face oval (below forehead)
+      if (((x - 9.5) / 3.5) ** 2 + ((y - 9.5) / 3.2) ** 2 < 1 && y > 5.5) return 2;
+      return 1; // brown fur
+    }
+
+    // ── Body ─────────────────────────────────────────────────────────────────
+    if (bodyR < 1) {
+      if (((x - 9) / 3.5) ** 2 + ((y - 14) / 4) ** 2 < 1) return 2; // cream belly
+      return 1; // brown sides
+    }
+
     return 0;
   });
 }
@@ -233,7 +265,7 @@ export function getLevelArt(level: number): number[] {
 // Each color is a sandy/warm variant suited to sand-art aesthetics.
 const LEVEL_ART_COLORS: [string, string, string, string, string][] = [
   ['#080808', '#e89018', '#f8d858', '#b84a00', '#b81008'], // 1: burny logo
-  ['#7898b0', '#3a7ac4', '#70b0f0', '#1a4880', '#b0d8f8'], // 2: fish
+  ['#0d0a08', '#8B5A2B', '#f0e0c8', '#2a1200', '#f4a0b8'], // 2: cat
   ['#b88090', '#d43a7c', '#f870b8', '#8c1a50', '#ffc0e0'], // 3: heart
   ['#809870', '#3a8c3a', '#70f070', '#1a5a1a', '#b0f0b0'], // 4: clover
   ['#8878a8', '#7c3ac4', '#b070f8', '#4a1a8c', '#d8c0f8'], // 5: gem
