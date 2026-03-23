@@ -350,6 +350,15 @@ export default function App() {
         });
       }
 
+      const deathEmojis = ['😭', '💩', '🤯', '😶‍🌫️'];
+      state.floatingTexts.push({
+        pos: { x: state.spiderPos.x, y: state.spiderPos.y - 40 },
+        text: deathEmojis[Math.floor(Math.random() * deathEmojis.length)],
+        life: 1.5,
+        maxLife: 1.5,
+        large: true,
+      });
+
       setStage('GAMEOVER');
     };
 
@@ -389,6 +398,14 @@ export default function App() {
               text: `-${captured}%`,
               life: 1.5,
               maxLife: 1.5,
+            });
+            const captureEmojis = ['🥳', '🌚', '👹', '😇', '😋'];
+            state.floatingTexts.push({
+              pos: { x: state.spiderPos.x, y: state.spiderPos.y - 52 },
+              text: captureEmojis[Math.floor(Math.random() * captureEmojis.length)],
+              life: 1.5,
+              maxLife: 1.5,
+              large: true,
             });
           }
         });

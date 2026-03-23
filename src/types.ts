@@ -17,6 +17,7 @@ export interface FloatingText {
   text: string;
   life: number;
   maxLife: number;
+  large?: boolean;
 }
 
 export interface Dimensions {

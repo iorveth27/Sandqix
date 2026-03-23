@@ -648,11 +648,10 @@ export function renderFrame(
     const alpha = ft.life / ft.maxLife;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.font = 'bold 22px Inter, sans-serif';
+    ctx.font = ft.large ? '32px sans-serif' : 'bold 22px Inter, sans-serif';
     ctx.textAlign = 'center';
-    // Thick black stroke for legibility over any background colour
     ctx.fillStyle = '#fde68a';
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = ft.large ? 0 : 12;
     ctx.shadowColor = 'rgba(245,166,35,0.8)';
     ctx.fillText(ft.text, tx, ty);
     ctx.restore();
